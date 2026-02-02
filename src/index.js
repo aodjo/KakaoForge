@@ -116,10 +116,21 @@ class KakaoBot extends EventEmitter {
    * @param {string} [opts.deviceName] - Device name shown in settings
    * @param {string} [opts.modelName] - Device model name
    * @param {boolean} [opts.forced] - Force login (kick other sub-devices)
+   * @param {boolean} [opts.checkAllowlist] - Check allowlist.json before QR login
+   * @param {boolean} [opts.enforceAllowlist] - Throw if not allowlisted
    * @param {function} [opts.onQrUrl] - Callback when QR URL is ready: (url) => {}
    * @param {function} [opts.onPasscode] - Callback when passcode is shown: (passcode) => {}
    */
-  async loginQR({ deviceName, modelName, forced = false, onQrUrl, onPasscode, useBrewery = false } = {}) {
+  async loginQR({
+    deviceName,
+    modelName,
+    forced = false,
+    checkAllowlist,
+    enforceAllowlist,
+    onQrUrl,
+    onPasscode,
+    useBrewery = false,
+  } = {}) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
@@ -133,6 +144,8 @@ class KakaoBot extends EventEmitter {
       modelName,
       forced,
       appVer: this.appVer,
+      checkAllowlist,
+      enforceAllowlist,
       onQrUrl,
       onPasscode,
     });
