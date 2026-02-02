@@ -128,8 +128,14 @@ function runBot(bot) {
         const chatId = parseInt(rest.substring(0, spaceIdx));
         const text = rest.substring(spaceIdx + 1);
         try {
-          await bot.sendMessage(chatId, text);
-          console.log('[+] 전송 완료');
+          const result = await bot.sendMessage(chatId, text);
+          if (result && result.body && result.body.logId) {
+            const msgId = result.body.msgId || result.body.msgid || result.body.messageId || '';
+            const extra = msgId ? ` msgId=${msgId}` : '';
+            console.log(`[+] send ok logId=${result.body.logId}${extra}`);
+          } else {
+            console.log('[+] send ok');
+          }
         } catch (err) {
           console.error('[!] 전송 실패:', err.message);
         }
