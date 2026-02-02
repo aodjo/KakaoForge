@@ -13,7 +13,7 @@ const DEFAULT_OS_VER = '14';
 const DEFAULT_DEVICE_NAME = 'KakaoForge';
 const DEFAULT_MODEL_NAME = 'SM-G998N';
 // QR 로그인은 태블릿 모델만 허용 (allowlist.json 기준)
-const DEFAULT_QR_MODEL_NAME = 'SM-X800';
+const DEFAULT_QR_MODEL_NAME = 'SM-T733';
 // QR 서비스는 별도 OkHttpClient 사용 → User-Agent가 다름
 const QR_USER_AGENT = 'okhttp/4.12.0';
 
@@ -176,6 +176,79 @@ function buildUserAgent(appVer = DEFAULT_APP_VER, osVer = DEFAULT_OS_VER) {
  */
 function buildAHeader(appVer = DEFAULT_APP_VER, lang = 'ko') {
   return `android/${appVer}/${lang}`;
+}
+
+/**
+ * Build Authorization header for KakaoTalk API (accessToken + deviceUuid).
+ *
+ * From decompiled: BO/d.java (OauthHelper)
+ * Format: "{accessToken} {deviceUuid}"
+ */
+function buildAuthorizationHeader(accessToken, deviceUuid) {
+  if (!accessToken || !deviceUuid) {
+    throw new Error('accessToken and deviceUuid are required for Authorization header');
+  }
+  return `${accessToken} ${deviceUuid}`;
+}
+
+/**
+ * Build headers for QR login authorization endpoints (main device).
+ */
+function buildQrAuthHeaders({
+  accessToken,
+  deviceUuid,
+  appVer = DEFAULT_APP_VER,
+  lang = 'ko',
+  userAgent = QR_USER_AGENT,
+} = {}) {
+  const headers = {
+    'Authorization': buildAuthorizationHeader(accessToken, deviceUuid),
+    'A': buildAHeader(appVer, lang),
+  };
+  if (userAgent) headers['User-Agent'] = userAgent;
+  return headers;
+}
+
+/**
+ * Extract QR id from url or return as-is.
+ */
+function extractQrId(qrUrlOrId) {
+  if (!qrUrlOrId) {
+    throw new Error('qrId is required');
+  }
+  const raw = String(qrUrlOrId);
+  const match = raw.match(/[?&]id=([^&]+)/);
+  const id = match ? match[1] : raw;
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id;
+  }
+}
+
+/**
+ * Generate macResponse for QR authorize (HMAC-SHA256).
+ *
+ * From decompiled: QRLoginViewModel.kt
+ * macResponse = Base64(HMAC_SHA256(refreshToken, challenge)).trim()
+ */
+function generateQrMacResponse(qrId, refreshToken) {
+  if (!refreshToken) {
+    throw new Error('refreshToken is required to generate macResponse');
+  }
+  const normalizedId = extractQrId(qrId);
+  const decoded = Buffer.from(normalizedId, 'base64').toString('utf-8');
+  let payload;
+  try {
+    payload = JSON.parse(decoded);
+  } catch (err) {
+    throw new Error(`Invalid QR id payload: ${err.message}`);
+  }
+  if (!payload || typeof payload.challenge !== 'string') {
+    throw new Error('QR id payload missing challenge');
+  }
+  const mac = crypto.createHmac('sha256', refreshToken).update(payload.challenge, 'utf-8').digest('base64');
+  return mac.trim();
 }
 
 /**
@@ -429,6 +502,29 @@ async function qrGenerate({
 }
 
 /**
+ * QR Code Login - Step 0: Get QR info (main device).
+ *
+ * GET https://katalk.kakao.com/android/account/qrCodeLogin/info?id=...
+ */
+async function qrInfo({
+  qrId,
+  accessToken,
+  deviceUuid,
+  appVer = DEFAULT_APP_VER,
+  lang = 'ko',
+} = {}) {
+  const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
+  const path = `/android/account/qrCodeLogin/info?id=${encodeURIComponent(extractQrId(qrId))}`;
+  const res = await httpsGet(KATALK_HOST, path, headers);
+
+  if (res.status !== 200) {
+    throw new Error(`QR info HTTP error: ${res.status}`);
+  }
+
+  return res.body;
+}
+
+/**
  * QR Code Login - Step 2: Poll for login result.
  *
  * POST https://katalk.kakao.com/android/account/qrCodeLogin/login
@@ -452,7 +548,7 @@ async function qrPollLogin({
     device: {
       uuid: deviceUuid,
     },
-    id: qrId,
+    id: extractQrId(qrId),
   };
 
   const headers = {
@@ -475,6 +571,79 @@ async function qrPollLogin({
 }
 
 /**
+ * QR Code Login - Authorize (main device).
+ *
+ * POST https://katalk.kakao.com/android/account/qrCodeLogin/authorize
+ *
+ * Request: { id, macResponse, forceLogin }
+ */
+async function qrAuthorize({
+  qrId,
+  refreshToken,
+  accessToken,
+  deviceUuid,
+  forceLogin = false,
+  appVer = DEFAULT_APP_VER,
+  lang = 'ko',
+} = {}) {
+  const macResponse = generateQrMacResponse(qrId, refreshToken);
+  const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
+  headers['Content-Type'] = 'application/json';
+
+  const jsonData = {
+    id: extractQrId(qrId),
+    macResponse,
+    forceLogin: !!forceLogin,
+  };
+
+  const res = await httpsPostJson(
+    KATALK_HOST,
+    '/android/account/qrCodeLogin/authorize',
+    jsonData,
+    headers,
+  );
+
+  if (res.status !== 200) {
+    throw new Error(`QR authorize HTTP error: ${res.status}`);
+  }
+
+  return res.body;
+}
+
+/**
+ * QR Code Login - Deny (main device).
+ *
+ * POST https://katalk.kakao.com/android/account/qrCodeLogin/deny
+ *
+ * Request: { id }
+ */
+async function qrDeny({
+  qrId,
+  accessToken,
+  deviceUuid,
+  appVer = DEFAULT_APP_VER,
+  lang = 'ko',
+} = {}) {
+  const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
+  headers['Content-Type'] = 'application/json';
+
+  const jsonData = { id: extractQrId(qrId) };
+
+  const res = await httpsPostJson(
+    KATALK_HOST,
+    '/android/account/qrCodeLogin/deny',
+    jsonData,
+    headers,
+  );
+
+  if (res.status !== 200) {
+    throw new Error(`QR deny HTTP error: ${res.status}`);
+  }
+
+  return res.body;
+}
+
+/**
  * QR Code Login - Step 3: Confirm with passcode.
  *
  * POST https://katalk.kakao.com/android/account/qrCodeLogin/confirm
@@ -488,10 +657,13 @@ async function qrConfirm({
   passcode,
   forced = false,
   permanent = true,
+  accessToken,
+  deviceUuid,
   appVer = DEFAULT_APP_VER,
+  lang = 'ko',
 }) {
   const jsonData = {
-    id: qrId,
+    id: extractQrId(qrId),
     passcode,
   };
   if (forced) jsonData.forced = true;
@@ -499,9 +671,12 @@ async function qrConfirm({
 
   const headers = {
     'User-Agent': QR_USER_AGENT,
-    'A': buildAHeader(appVer),
+    'A': buildAHeader(appVer, lang),
     'Content-Type': 'application/json',
   };
+  if (accessToken && deviceUuid) {
+    headers['Authorization'] = buildAuthorizationHeader(accessToken, deviceUuid);
+  }
 
   const res = await httpsPostJson(
     KATALK_HOST,
@@ -531,7 +706,7 @@ async function qrCancel({
     device: {
       uuid: deviceUuid,
     },
-    id: qrId,
+    id: extractQrId(qrId),
   };
 
   const headers = {
@@ -563,6 +738,8 @@ async function qrCancel({
  * @param {string} [opts.osVer] - OS version
  * @param {boolean} [opts.forced] - Force login
  * @param {boolean} [opts.permanent] - Permanent login
+ * @param {boolean} [opts.checkAllowlist=true] - Check allowlist.json before QR login
+ * @param {boolean} [opts.enforceAllowlist=false] - Throw if not allowlisted
  * @param {string} [opts.appVer] - App version
  * @param {function} [opts.onQrUrl] - Callback when QR URL is ready: (url) => {}
  * @param {function} [opts.onPasscode] - Callback when passcode is shown: (passcode) => {}
@@ -575,12 +752,28 @@ async function qrLogin({
   osVer = DEFAULT_OS_VER,
   forced = false,
   permanent = true,
+  checkAllowlist = true,
+  enforceAllowlist = false,
   appVer = DEFAULT_APP_VER,
   onQrUrl = null,
   onPasscode = null,
 }) {
   if (!deviceUuid) {
     deviceUuid = generateDeviceUuid();
+  }
+
+  if (checkAllowlist && modelName) {
+    try {
+      const allowRes = await subDeviceAllowList({ modelName, appVer });
+      const allowlisted = !!allowRes?.allowlisted;
+      console.log(`[*] SubDevice allowlist (QR): model=${modelName}, allowlisted=${allowlisted}`);
+      if (!allowlisted && enforceAllowlist) {
+        throw new Error('Model not allowlisted for sub-device QR login');
+      }
+    } catch (err) {
+      if (enforceAllowlist) throw err;
+      console.warn(`[!] Allowlist check failed: ${err.message}`);
+    }
   }
 
   // Step 1: Generate QR
@@ -594,10 +787,7 @@ async function qrLogin({
   });
 
   const qrPath = qrResult.url;
-
-  // Extract QR ID from URL query parameter
-  const idMatch = qrPath.match(/[?&]id=([^&]+)/);
-  const qrId = idMatch ? decodeURIComponent(idMatch[1]) : qrPath;
+  const qrId = extractQrId(qrPath);
 
   // 실제 앱은 서버 응답의 상대 경로를 그대로 QR에 인코딩함 (호스트 없이)
   const qrContent = qrPath;
@@ -673,10 +863,17 @@ module.exports = {
   subDeviceAllowList,
   refreshOAuthToken,
   qrGenerate,
+  qrInfo,
   qrPollLogin,
+  qrAuthorize,
+  qrDeny,
   qrConfirm,
   qrCancel,
   qrLogin,
+  buildAuthorizationHeader,
+  buildQrAuthHeaders,
+  generateQrMacResponse,
+  extractQrId,
   generateDeviceUuid,
   buildUserAgent,
   buildAHeader,
