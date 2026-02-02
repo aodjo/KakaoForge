@@ -4,6 +4,11 @@ const path = require('path');
 
 const AUTH_FILE = path.join(__dirname, '..', 'auth.json');
 
+function formatKstTimestamp(date = new Date()) {
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().replace('Z', '+09:00');
+}
+
 /**
  * readline 기반 프롬프트.
  */
@@ -329,7 +334,7 @@ function saveAuth(data) {
     accessToken: data.accessToken || data.oauthToken,
     refreshToken: data.refreshToken || '',
     deviceUuid: data.deviceUuid || '',
-    savedAt: new Date().toISOString(),
+    savedAt: formatKstTimestamp(),
   };
   fs.writeFileSync(AUTH_FILE, JSON.stringify(payload, null, 2), 'utf-8');
   console.log(`[+] 인증 정보 저장됨: ${AUTH_FILE}`);
