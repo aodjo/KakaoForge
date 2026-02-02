@@ -542,33 +542,26 @@ class KakaoBot extends EventEmitter {
   }
 
   /**
-   * Fetch chat folders with chat room IDs via Brewery.
-   * Returns { revision, folderInfoList: [{ id, name, chatIds: [number], nonChatItems }] }
+   * Fetch chat room list via Brewery (paginated).
+   * Returns { last, size, content: [{ chatId, type, activeMembersCount, ... }] }
    *
+   * @param {Object} [opts]
+   * @param {number} [opts.lastChatId] - Pagination cursor
+   * @param {number} [opts.fetchCount=100]
    * @returns {Promise<Object>}
    */
-  async getChatFolders() {
+  async getChatRooms(opts = {}) {
     if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getChatFolders();
+    return await this._brewery.getChatRooms(opts);
   }
 
   /**
-   * Get all chat IDs from all folders (convenience method).
-   * @returns {Promise<number[]>} Unique chat IDs across all folders
+   * Get all chat rooms (handles pagination).
+   * @returns {Promise<Array>} All chat room objects
    */
-  async getAllChatIds() {
-    const result = await this.getChatFolders();
-    const chatIds = new Set();
-    if (result.folderInfoList) {
-      for (const folder of result.folderInfoList) {
-        if (folder.chatIds) {
-          for (const id of folder.chatIds) {
-            chatIds.add(id);
-          }
-        }
-      }
-    }
-    return [...chatIds];
+  async getAllChatRooms() {
+    if (!this._brewery) throw new Error('Brewery not connected');
+    return await this._brewery.getAllChatRooms();
   }
 
   // ─── Message Sending ────────────────────────────────────────────

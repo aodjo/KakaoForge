@@ -396,40 +396,53 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Fetch chat folders with chat IDs (FolderChatService).
+   * Fetch chat room list (DrawerChatService: /alcatraz/drawer/chats).
    * Uses standard PILSNER auth — works for sub-devices.
    *
-   * Returns FolderListResponse:
-   *   { revision: number, folderInfoList: [FolderInfo] }
-   * FolderInfo:
-   *   { id: string, name: string, chatIds: number[], nonChatItems: string[] }
+   * Returns RestoreChatRoomResult:
+   *   { last: boolean, size: number, content: [DrawerChatInfo] }
+   * DrawerChatInfo:
+   *   { chatId, type, activeMembersCount, newMessageCount, lastLogId,
+   *     lastSeenLogId, displayMembers, left, ... }
    *
+   * @param {Object} [opts]
+   * @param {number} [opts.lastChatId] - Cursor for pagination (last chatId from prev response)
+   * @param {number} [opts.fetchCount=100] - Number of chats to fetch per page
    * @returns {Promise<Object>}
    */
-  async getChatFolders() {
-    const res = await this.request('GET', '/messaging/chat-folders', { timeout: 15000 });
+  async getChatRooms({ lastChatId, fetchCount = 100 } = {}) {
+    const params = new URLSearchParams();
+    if (lastChatId != null) params.set('lastChatId', String(lastChatId));
+    params.set('fetchCount', String(fetchCount));
+    const path = `/alcatraz/drawer/chats?${params.toString()}`;
+    const res = await this.request('GET', path, { timeout: 15000 });
 
     if (res.status !== 200) {
-      throw new Error(`getChatFolders failed: status=${res.status}`);
+      throw new Error(`getChatRooms failed: status=${res.status}`);
     }
 
-    return this._parseJson(res) || { revision: 0, folderInfoList: [] };
+    return this._parseJson(res) || { last: true, size: 0, content: [] };
   }
 
   /**
-   * Fetch chat folders revision number.
-   * Used to check if the folder list has changed since last fetch.
-   *
-   * @returns {Promise<Object>} { revision: number }
+   * Fetch all chat rooms (handles pagination automatically).
+   * @param {number} [fetchCount=100] - Number of chats per request
+   * @returns {Promise<Array>} All DrawerChatInfo objects
    */
-  async getChatFoldersRevision() {
-    const res = await this.request('GET', '/messaging/chat-folders/revision', { timeout: 15000 });
+  async getAllChatRooms(fetchCount = 100) {
+    const allChats = [];
+    let lastChatId = undefined;
 
-    if (res.status !== 200) {
-      throw new Error(`getChatFoldersRevision failed: status=${res.status}`);
+    while (true) {
+      const result = await this.getChatRooms({ lastChatId, fetchCount });
+      if (result.content && result.content.length > 0) {
+        allChats.push(...result.content);
+        lastChatId = result.content[result.content.length - 1].chatId;
+      }
+      if (result.last || !result.content || result.content.length === 0) break;
     }
 
-    return this._parseJson(res) || { revision: 0 };
+    return allChats;
   }
 
   /**

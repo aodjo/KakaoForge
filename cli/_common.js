@@ -171,34 +171,26 @@ function runBot(bot) {
       }
     } else if (trimmed === 'chats' || trimmed === 'chatlist') {
       try {
-        console.log('[*] 채팅 폴더 조회 중...');
-        const result = await bot.getChatFolders();
-        if (result.folderInfoList && result.folderInfoList.length > 0) {
-          let totalChats = 0;
-          console.log(`[+] 폴더 ${result.folderInfoList.length}개 (revision=${result.revision}):`);
-          for (const folder of result.folderInfoList) {
-            const ids = folder.chatIds || [];
-            totalChats += ids.length;
-            console.log(`  폴더 "${folder.name}" (id=${folder.id}): 채팅방 ${ids.length}개`);
-            for (const chatId of ids) {
-              console.log(`    chatId=${chatId}`);
-            }
+        console.log('[*] 채팅방 목록 조회 중...');
+        const result = await bot.getChatRooms();
+        if (result.content && result.content.length > 0) {
+          console.log(`[+] 채팅방 ${result.content.length}개 (last=${result.last}):`);
+          for (const chat of result.content) {
+            const members = chat.displayMembers
+              ? chat.displayMembers.map(m => m.nickName || m.nickname || '?').join(', ')
+              : '';
+            const newMsg = chat.newMessageCount || chat.newMsgCnt || 0;
+            console.log(`  chatId=${chat.chatId} type=${chat.type} members=${chat.activeMembersCount || 0} new=${newMsg} lastLogId=${chat.lastLogId || 0} left=${chat.left || false}${members ? ' [' + members + ']' : ''}`);
           }
-          console.log(`[+] 총 채팅방: ${totalChats}개`);
+          if (!result.last) {
+            console.log('[*] 더 많은 채팅방이 있습니다. (last=false)');
+          }
         } else {
-          console.log('[*] 폴더 목록이 비어있습니다.');
+          console.log('[*] 채팅방 목록이 비어있습니다.');
           console.log('[*] raw:', JSON.stringify(result, null, 2));
         }
       } catch (err) {
-        console.error('[!] getChatFolders 실패:', err.message);
-        // Fallback: try chat tab settings
-        try {
-          console.log('[*] chat/tab/settings 시도 중...');
-          const tabResult = await bot.getChatTabSettings();
-          console.log('[+] 채팅 탭 설정:', JSON.stringify(tabResult, null, 2));
-        } catch (err2) {
-          console.error('[!] 탭 설정도 실패:', err2.message);
-        }
+        console.error('[!] getChatRooms 실패:', err.message);
       }
     } else if (trimmed === 'watching') {
       const ids = [...bot._syncChatIds];
