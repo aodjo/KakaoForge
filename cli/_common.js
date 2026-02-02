@@ -173,17 +173,14 @@ function runBot(bot) {
       try {
         console.log('[*] 채팅방 목록 조회 중...');
         const result = await bot.getChatRooms();
-        if (result.content && result.content.length > 0) {
-          console.log(`[+] 채팅방 ${result.content.length}개 (last=${result.last}):`);
-          for (const chat of result.content) {
+        const chats = result.chats || [];
+        if (chats.length > 0) {
+          console.log(`[+] 채팅방 ${chats.length}개:`);
+          for (const chat of chats) {
             const members = chat.displayMembers
-              ? chat.displayMembers.map(m => m.nickName || m.nickname || '?').join(', ')
+              ? chat.displayMembers.map(m => m.nickname || m.nickName || '?').join(', ')
               : '';
-            const newMsg = chat.newMessageCount || chat.newMsgCnt || 0;
-            console.log(`  chatId=${chat.chatId} type=${chat.type} members=${chat.activeMembersCount || 0} new=${newMsg} lastLogId=${chat.lastLogId || 0} left=${chat.left || false}${members ? ' [' + members + ']' : ''}`);
-          }
-          if (!result.last) {
-            console.log('[*] 더 많은 채팅방이 있습니다. (last=false)');
+            console.log(`  chatId=${chat.chatId} type=${chat.type} unread=${chat.unreadCount || 0} title="${chat.title || ''}" [${members}]`);
           }
         } else {
           console.log('[*] 채팅방 목록이 비어있습니다.');
@@ -191,6 +188,35 @@ function runBot(bot) {
         }
       } catch (err) {
         console.error('[!] getChatRooms 실패:', err.message);
+      }
+    } else if (trimmed === 'probe') {
+      // 여러 엔드포인트를 시도해서 채팅방 목록을 찾음
+      const paths = [
+        '/messaging/chats',
+        '/messaging/chats?fetchCount=20',
+        '/chat/rooms',
+        '/chat/list',
+        '/chat/chats',
+        '/chats',
+        '/chats?fetchCount=20',
+        '/alcatraz/chats',
+        '/alcatraz/chats?fetchCount=20',
+        '/alcatraz/drawer/chats?fetchCount=20',
+        '/messaging/chat-folders',
+        '/messaging/sync',
+        '/sync',
+        '/init',
+        '/messaging/init',
+      ];
+      console.log(`[*] ${paths.length}개 엔드포인트 시도 중...`);
+      for (const p of paths) {
+        try {
+          const res = await bot.breweryRequest('GET', p, { timeout: 8000 });
+          const body = res.body.toString('utf8').substring(0, 300);
+          console.log(`  ${res.status} ${p} → ${body}`);
+        } catch (err) {
+          console.log(`  ERR ${p} → ${err.message}`);
+        }
       }
     } else if (trimmed === 'watching') {
       const ids = [...bot._syncChatIds];

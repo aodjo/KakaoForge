@@ -542,26 +542,14 @@ class KakaoBot extends EventEmitter {
   }
 
   /**
-   * Fetch chat room list via Brewery (paginated).
-   * Returns { last, size, content: [{ chatId, type, activeMembersCount, ... }] }
+   * Fetch chat room list via GET /messaging/chats.
+   * Returns { chats: [{ chatId, type, title, unreadCount, lastMessageId, displayMembers, ... }] }
    *
-   * @param {Object} [opts]
-   * @param {number} [opts.lastChatId] - Pagination cursor
-   * @param {number} [opts.fetchCount=100]
    * @returns {Promise<Object>}
    */
-  async getChatRooms(opts = {}) {
+  async getChatRooms() {
     if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getChatRooms(opts);
-  }
-
-  /**
-   * Get all chat rooms (handles pagination).
-   * @returns {Promise<Array>} All chat room objects
-   */
-  async getAllChatRooms() {
-    if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getAllChatRooms();
+    return await this._brewery.getChatRooms();
   }
 
   // ─── Message Sending ────────────────────────────────────────────

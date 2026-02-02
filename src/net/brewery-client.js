@@ -396,53 +396,25 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Fetch chat room list (DrawerChatService: /alcatraz/drawer/chats).
-   * Uses standard PILSNER auth — works for sub-devices.
+   * Fetch chat room list via GET /messaging/chats.
+   * Uses standard PILSNER auth.
    *
-   * Returns RestoreChatRoomResult:
-   *   { last: boolean, size: number, content: [DrawerChatInfo] }
-   * DrawerChatInfo:
-   *   { chatId, type, activeMembersCount, newMessageCount, lastLogId,
-   *     lastSeenLogId, displayMembers, left, ... }
+   * Returns:
+   *   { chats: [ChatInfo] }
+   * ChatInfo:
+   *   { chatId, type, title, isEnterAllowed, unreadCount,
+   *     lastMessageId, lastSeenLogId, displayMembers, ... }
    *
-   * @param {Object} [opts]
-   * @param {number} [opts.lastChatId] - Cursor for pagination (last chatId from prev response)
-   * @param {number} [opts.fetchCount=100] - Number of chats to fetch per page
    * @returns {Promise<Object>}
    */
-  async getChatRooms({ lastChatId, fetchCount = 100 } = {}) {
-    const params = new URLSearchParams();
-    if (lastChatId != null) params.set('lastChatId', String(lastChatId));
-    params.set('fetchCount', String(fetchCount));
-    const path = `/alcatraz/drawer/chats?${params.toString()}`;
-    const res = await this.request('GET', path, { timeout: 15000 });
+  async getChatRooms() {
+    const res = await this.request('GET', '/messaging/chats', { timeout: 15000 });
 
     if (res.status !== 200) {
       throw new Error(`getChatRooms failed: status=${res.status}`);
     }
 
-    return this._parseJson(res) || { last: true, size: 0, content: [] };
-  }
-
-  /**
-   * Fetch all chat rooms (handles pagination automatically).
-   * @param {number} [fetchCount=100] - Number of chats per request
-   * @returns {Promise<Array>} All DrawerChatInfo objects
-   */
-  async getAllChatRooms(fetchCount = 100) {
-    const allChats = [];
-    let lastChatId = undefined;
-
-    while (true) {
-      const result = await this.getChatRooms({ lastChatId, fetchCount });
-      if (result.content && result.content.length > 0) {
-        allChats.push(...result.content);
-        lastChatId = result.content[result.content.length - 1].chatId;
-      }
-      if (result.last || !result.content || result.content.length === 0) break;
-    }
-
-    return allChats;
+    return this._parseJson(res) || { chats: [] };
   }
 
   /**
