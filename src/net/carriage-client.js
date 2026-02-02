@@ -210,7 +210,15 @@ class CarriageClient extends EventEmitter {
     if (opts.threadId !== undefined && opts.threadId !== null) body.threadId = toLong(opts.threadId);
     if (opts.featureStat) body.featureStat = opts.featureStat;
 
-    return await this.request('WRITE', body);
+    const res = await this.request('WRITE', body);
+    if (typeof res.status === 'number' && res.status !== 0) {
+      throw new Error(`WRITE failed: status=${res.status}`);
+    }
+    if (!res.body || !res.body.logId) {
+      const preview = res.body ? JSON.stringify(res.body) : '(empty)';
+      throw new Error(`WRITE response missing logId: ${preview}`);
+    }
+    return res;
   }
 
   /**
