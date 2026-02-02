@@ -7,6 +7,40 @@ const { LocoStream } = require('./loco-stream');
 const BOOKING_HOST = 'booking-loco.kakao.com';
 const BOOKING_PORT = 443;
 
+function normalizeStringList(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map((v) => String(v).trim()).filter(Boolean))];
+}
+
+function normalizePortList(list) {
+  if (!Array.isArray(list)) return [];
+  const ports = list
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  return [...new Set(ports)];
+}
+
+function normalizeGetConf(body = {}) {
+  const ticket = body.ticket || body.ticketInfo || body.TicketInfo || {};
+  const lsl = normalizeStringList(ticket.lsl);
+  const lsl6 = normalizeStringList(ticket.lsl6);
+
+  const wifi = body.wifi || body.connInfoForWifi || body.connInfoWifi || {};
+  const cell = body['3g'] || body.connInfoForCellular || body.connInfo3g || {};
+
+  const portsWifi = normalizePortList(wifi.ports);
+  const portsCellular = normalizePortList(cell.ports);
+
+  return {
+    revision: typeof body.revision === 'number' ? body.revision : 0,
+    ticket: { lsl, lsl6 },
+    connInfo: { wifi, cellular: cell },
+    portsWifi,
+    portsCellular,
+    raw: body,
+  };
+}
+
 /**
  * Booking server connection (SSL/TLS).
  * Used for CHECKIN to get the Carriage server address.
@@ -22,9 +56,9 @@ class BookingClient extends EventEmitter {
     this._stream.on('error', (err) => this.emit('error', err));
   }
 
-  connect() {
+  connect(host = BOOKING_HOST, port = BOOKING_PORT) {
     return new Promise((resolve, reject) => {
-      this._socket = tls.connect(BOOKING_PORT, BOOKING_HOST, {
+      this._socket = tls.connect(port, host, {
         rejectUnauthorized: true,
       });
 
@@ -70,7 +104,7 @@ class BookingClient extends EventEmitter {
   /**
    * Send CHECKIN to get Carriage server address.
    */
-  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '450,05' }) {
+  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '45005' }) {
     const body = {
       userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
       os,
@@ -90,6 +124,20 @@ class BookingClient extends EventEmitter {
       cacheExpire: res.body.cacheExpire || 0,
       status: res.status,
     };
+  }
+
+  /**
+   * Send GETCONF to retrieve Ticket hosts and port lists.
+   */
+  async getConf({ userId, os = 'android', mccmnc = '45005' }) {
+    const body = {
+      userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
+      mccmnc,
+      os,
+    };
+
+    const res = await this.request('GETCONF', body);
+    return normalizeGetConf(res.body);
   }
 
   _onPacket(packet) {
