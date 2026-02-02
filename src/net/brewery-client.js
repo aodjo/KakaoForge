@@ -425,7 +425,7 @@ class BreweryClient extends EventEmitter {
     const qs = params.toString();
     const path = `/drawer/chat/list${qs ? '?' + qs : ''}`;
     const res = await this.request('GET', path, {
-      headers: { 'authorization': `MALDIVE ${this._oauthToken}` },
+      headers: { 'authorization': `MALDIVE ${this._oauthToken}-${this._deviceUuid}` },
       timeout: 15000,
     });
 
