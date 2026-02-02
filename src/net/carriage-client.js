@@ -197,7 +197,8 @@ class CarriageClient extends EventEmitter {
       msg: text,
       type,
       noSeen: !!opts.noSeen,
-      scope: typeof opts.scope === 'number' ? opts.scope : 0,
+      // Default to normal chat scope (1). 0 triggers InvalidParameter (-203).
+      scope: typeof opts.scope === 'number' ? opts.scope : 1,
       silence: !!(opts.silence || opts.isSilence),
     };
 

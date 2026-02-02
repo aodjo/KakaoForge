@@ -690,7 +690,7 @@ class KakaoBot extends EventEmitter {
    * @param {string} [opts.supplement]
    * @param {string} [opts.from]
    * @param {string} [opts.extra]
-   * @param {number} [opts.scope=0]
+   * @param {number} [opts.scope=1]
    * @param {number} [opts.threadId]
    * @param {string} [opts.featureStat]
    * @param {boolean} [opts.silence=false]
@@ -707,7 +707,7 @@ class KakaoBot extends EventEmitter {
       ...opts,
       msgId,
       noSeen: opts.noSeen ?? false,
-      scope: typeof opts.scope === 'number' ? opts.scope : 0,
+      scope: typeof opts.scope === 'number' ? opts.scope : 1,
       silence: opts.silence ?? opts.isSilence ?? false,
     };
 
