@@ -171,22 +171,26 @@ function runBot(bot) {
       }
     } else if (trimmed === 'chats' || trimmed === 'chatlist') {
       try {
-        console.log('[*] 채팅방 목록 조회 중...');
-        const result = await bot.getChatList();
-        if (result.items && result.items.length > 0) {
-          console.log(`[+] 채팅방 ${result.items.length}개 (hasMore=${result.hasMore}):`);
-          for (const item of result.items) {
-            const members = item.displayMembers
-              ? item.displayMembers.map(m => m.nickName).join(', ')
-              : '';
-            console.log(`  chatId=${item.chatId} title="${item.title || ''}" joined=${item.joined} members=[${members}]`);
+        console.log('[*] 채팅 폴더 조회 중...');
+        const result = await bot.getChatFolders();
+        if (result.folderInfoList && result.folderInfoList.length > 0) {
+          let totalChats = 0;
+          console.log(`[+] 폴더 ${result.folderInfoList.length}개 (revision=${result.revision}):`);
+          for (const folder of result.folderInfoList) {
+            const ids = folder.chatIds || [];
+            totalChats += ids.length;
+            console.log(`  폴더 "${folder.name}" (id=${folder.id}): 채팅방 ${ids.length}개`);
+            for (const chatId of ids) {
+              console.log(`    chatId=${chatId}`);
+            }
           }
+          console.log(`[+] 총 채팅방: ${totalChats}개`);
         } else {
-          console.log('[*] 채팅방 목록이 비어있거나 지원되지 않는 엔드포인트입니다.');
+          console.log('[*] 폴더 목록이 비어있습니다.');
           console.log('[*] raw:', JSON.stringify(result, null, 2));
         }
       } catch (err) {
-        console.error('[!] chatList 실패:', err.message);
+        console.error('[!] getChatFolders 실패:', err.message);
         // Fallback: try chat tab settings
         try {
           console.log('[*] chat/tab/settings 시도 중...');

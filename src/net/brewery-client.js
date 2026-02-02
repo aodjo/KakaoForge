@@ -67,18 +67,6 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Headers for Drawer requests (MALDIVE auth).
-   */
-  _drawerHeaders(extra = {}) {
-    return {
-      'authorization': `MALDIVE ${this._oauthToken}`,
-      'talk-agent': `android/${this._appVer}`,
-      'talk-language': this._lang,
-      ...extra,
-    };
-  }
-
-  /**
    * Connect HTTP/2 session to talk-pilsner.kakao.com.
    */
   connect() {
@@ -408,32 +396,40 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Fetch chat room list (DrawerService: /drawer/chat/list).
-   * Uses MALDIVE auth instead of standard PILSNER auth.
-   * Returns NavigationResponse: { items: [NavigationItem], hasMore: boolean }
-   * NavigationItem: { chatId, title, type, count, size, joined, displayMembers, ... }
+   * Fetch chat folders with chat IDs (FolderChatService).
+   * Uses standard PILSNER auth — works for sub-devices.
    *
-   * @param {Object} [opts]
-   * @param {string} [opts.verticalType] - Vertical type filter
-   * @param {string} [opts.status] - Status filter
+   * Returns FolderListResponse:
+   *   { revision: number, folderInfoList: [FolderInfo] }
+   * FolderInfo:
+   *   { id: string, name: string, chatIds: number[], nonChatItems: string[] }
+   *
    * @returns {Promise<Object>}
    */
-  async getChatList({ verticalType = '', status = '' } = {}) {
-    const params = new URLSearchParams();
-    if (verticalType) params.set('verticalType', verticalType);
-    if (status) params.set('status', status);
-    const qs = params.toString();
-    const path = `/drawer/chat/list${qs ? '?' + qs : ''}`;
-    const res = await this.request('GET', path, {
-      headers: { 'authorization': `MALDIVE ${this._oauthToken}-${this._deviceUuid}` },
-      timeout: 15000,
-    });
+  async getChatFolders() {
+    const res = await this.request('GET', '/messaging/chat-folders', { timeout: 15000 });
 
     if (res.status !== 200) {
-      throw new Error(`getChatList failed: status=${res.status}`);
+      throw new Error(`getChatFolders failed: status=${res.status}`);
     }
 
-    return this._parseJson(res) || { items: [], hasMore: false };
+    return this._parseJson(res) || { revision: 0, folderInfoList: [] };
+  }
+
+  /**
+   * Fetch chat folders revision number.
+   * Used to check if the folder list has changed since last fetch.
+   *
+   * @returns {Promise<Object>} { revision: number }
+   */
+  async getChatFoldersRevision() {
+    const res = await this.request('GET', '/messaging/chat-folders/revision', { timeout: 15000 });
+
+    if (res.status !== 200) {
+      throw new Error(`getChatFoldersRevision failed: status=${res.status}`);
+    }
+
+    return this._parseJson(res) || { revision: 0 };
   }
 
   /**

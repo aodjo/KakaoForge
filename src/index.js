@@ -542,17 +542,33 @@ class KakaoBot extends EventEmitter {
   }
 
   /**
-   * Fetch chat room list via Brewery.
-   * Returns { items: [{ chatId, title, type, count, joined, displayMembers, ... }], hasMore }
+   * Fetch chat folders with chat room IDs via Brewery.
+   * Returns { revision, folderInfoList: [{ id, name, chatIds: [number], nonChatItems }] }
    *
-   * @param {Object} [opts]
-   * @param {string} [opts.verticalType]
-   * @param {string} [opts.status]
    * @returns {Promise<Object>}
    */
-  async getChatList(opts = {}) {
+  async getChatFolders() {
     if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getChatList(opts);
+    return await this._brewery.getChatFolders();
+  }
+
+  /**
+   * Get all chat IDs from all folders (convenience method).
+   * @returns {Promise<number[]>} Unique chat IDs across all folders
+   */
+  async getAllChatIds() {
+    const result = await this.getChatFolders();
+    const chatIds = new Set();
+    if (result.folderInfoList) {
+      for (const folder of result.folderInfoList) {
+        if (folder.chatIds) {
+          for (const id of folder.chatIds) {
+            chatIds.add(id);
+          }
+        }
+      }
+    }
+    return [...chatIds];
   }
 
   // ─── Message Sending ────────────────────────────────────────────
