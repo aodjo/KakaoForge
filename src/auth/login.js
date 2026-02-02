@@ -121,6 +121,49 @@ function httpsPostJson(host, path, jsonData, headers = {}) {
 }
 
 /**
+ * Make an HTTPS GET request (JSON expected).
+ */
+function httpsGet(host, path, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const defaultHeaders = {
+      'Accept': '*/*',
+      'Accept-Language': 'ko',
+      'Connection': 'keep-alive',
+      ...headers,
+    };
+
+    const options = {
+      hostname: host,
+      port: 443,
+      path,
+      method: 'GET',
+      headers: defaultHeaders,
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks = [];
+      const stream = res.headers['content-encoding'] === 'gzip'
+        ? res.pipe(zlib.createGunzip())
+        : res;
+      stream.on('data', (chunk) => chunks.push(chunk));
+      stream.on('end', () => {
+        const data = Buffer.concat(chunks).toString('utf-8');
+        try {
+          const json = JSON.parse(data);
+          resolve({ status: res.statusCode, headers: res.headers, body: json });
+        } catch {
+          resolve({ status: res.statusCode, headers: res.headers, body: data });
+        }
+      });
+      stream.on('error', reject);
+    });
+
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/**
  * Build the User-Agent string for KakaoTalk Android.
  */
 function buildUserAgent(appVer = DEFAULT_APP_VER, osVer = DEFAULT_OS_VER) {
@@ -133,6 +176,39 @@ function buildUserAgent(appVer = DEFAULT_APP_VER, osVer = DEFAULT_OS_VER) {
  */
 function buildAHeader(appVer = DEFAULT_APP_VER, lang = 'ko') {
   return `android/${appVer}/${lang}`;
+}
+
+/**
+ * Check if a model name is allowlisted for sub-device login.
+ *
+ * GET https://katalk.kakao.com/android/account/allowlist.json?model_name=...
+ *
+ * From decompiled:
+ *   - SubDeviceLoginService.java: GET allowlist.json (model_name)
+ */
+async function subDeviceAllowList({
+  modelName,
+  appVer = DEFAULT_APP_VER,
+  lang = 'ko',
+  osVer = DEFAULT_OS_VER,
+} = {}) {
+  if (!modelName) {
+    throw new Error('modelName is required for allowlist check');
+  }
+
+  const headers = {
+    'User-Agent': buildUserAgent(appVer, osVer),
+    'A': buildAHeader(appVer, lang),
+  };
+
+  const path = `/android/account/allowlist.json?model_name=${encodeURIComponent(modelName)}`;
+  const res = await httpsGet(KATALK_HOST, path, headers);
+
+  if (res.status !== 200) {
+    throw new Error(`allowlist HTTP error: ${res.status}`);
+  }
+
+  return res.body;
 }
 
 /**
@@ -153,6 +229,8 @@ function buildAHeader(appVer = DEFAULT_APP_VER, lang = 'ko') {
  * @param {string} [opts.modelName] - Device model name
  * @param {boolean} [opts.forced] - Force login (kick other sub-devices)
  * @param {boolean} [opts.permanent] - Permanent login
+ * @param {boolean} [opts.checkAllowlist=true] - Check allowlist.json before login
+ * @param {boolean} [opts.enforceAllowlist=false] - Throw if not allowlisted
  * @param {string} [opts.appVer] - App version
  * @returns {Promise<Object>} Login response with access_token, refresh_token, userId, etc.
  */
@@ -164,14 +242,30 @@ async function subDeviceLogin({
   modelName = DEFAULT_MODEL_NAME,
   forced = false,
   permanent = true,
+  checkAllowlist = true,
+  enforceAllowlist = false,
   appVer = DEFAULT_APP_VER,
 }) {
   if (!deviceUuid) {
     deviceUuid = generateDeviceUuid();
   }
 
-  // XVC header: account key is empty string for login (not yet authenticated)
-  const xvc = generateXVCHeader(deviceUuid, '');
+  if (checkAllowlist && modelName) {
+    try {
+      const allowRes = await subDeviceAllowList({ modelName, appVer });
+      const allowlisted = !!allowRes?.allowlisted;
+      console.log(`[*] SubDevice allowlist: model=${modelName}, allowlisted=${allowlisted}`);
+      if (!allowlisted && enforceAllowlist) {
+        throw new Error('Model not allowlisted for sub-device login');
+      }
+    } catch (err) {
+      if (enforceAllowlist) throw err;
+      console.warn(`[!] Allowlist check failed: ${err.message}`);
+    }
+  }
+
+  // XVC header: account key is email
+  const xvc = generateXVCHeader(deviceUuid, email);
 
   const formData = {
     email,
@@ -576,6 +670,7 @@ async function qrLogin({
 
 module.exports = {
   subDeviceLogin,
+  subDeviceAllowList,
   refreshOAuthToken,
   qrGenerate,
   qrPollLogin,
@@ -587,6 +682,7 @@ module.exports = {
   buildAHeader,
   httpsPost,
   httpsPostJson,
+  httpsGet,
   KATALK_HOST,
   AUTH_HOST,
   DEFAULT_APP_VER,

@@ -71,8 +71,10 @@ class KakaoBot extends EventEmitter {
    * @param {string} [opts.deviceName] - Device name shown in settings
    * @param {string} [opts.modelName] - Device model name
    * @param {boolean} [opts.forced] - Force login (kick other sub-devices)
+   * @param {boolean} [opts.checkAllowlist] - Check allowlist.json before login (sub-device)
+   * @param {boolean} [opts.enforceAllowlist] - Throw if not allowlisted (sub-device)
    */
-  async login({ email, password, deviceName, modelName, forced = false, useBrewery = false }) {
+  async login({ email, password, deviceName, modelName, forced = false, checkAllowlist, enforceAllowlist, useBrewery = false }) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
@@ -87,6 +89,8 @@ class KakaoBot extends EventEmitter {
       deviceName,
       modelName,
       forced,
+      checkAllowlist,
+      enforceAllowlist,
       appVer: this.appVer,
     });
 
