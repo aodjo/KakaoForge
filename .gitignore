@@ -1,0 +1,11 @@
+node_modules/
+auth.json
+decompiled/
+jadx/
+xapk_extracted/
+nul
+MEMORY.md
+package-lock.json
+CLAUDE.md
+*.zip
+*.xapk
