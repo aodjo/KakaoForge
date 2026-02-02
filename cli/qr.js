@@ -12,13 +12,17 @@ const { runBot, saveAuth } = require('./_common');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = {};
+  const opts = { transport: 'brewery' };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--device-name': case '-n': opts.deviceName = args[++i]; break;
       case '--model-name': case '-m':  opts.modelName = args[++i]; break;
       case '--device-uuid': case '-u': opts.deviceUuid = args[++i]; break;
       case '--forced': case '-f':      opts.forced = true; break;
+      case '--transport':             opts.transport = (args[++i] || '').toLowerCase(); break;
+      case '--loco':                  opts.transport = 'loco'; break;
+      case '--both':                  opts.transport = 'both'; break;
+      case '--brewery':               opts.transport = 'brewery'; break;
       case '--help': case '-h':
         console.log(`사용법: node cli/qr.js [옵션]
 
@@ -30,6 +34,7 @@ function parseArgs() {
   -h, --help                  도움말
 
 QR URL이 출력되면 주 기기 카카오톡 > 설정 > QR 스캔으로 인증하세요.`);
+        console.log('Transport: --transport <brewery|loco|both> (default: brewery), --loco, --both');
         process.exit(0);
     }
   }
@@ -38,6 +43,8 @@ QR URL이 출력되면 주 기기 카카오톡 > 설정 > QR 스캔으로 인증
 
 async function main() {
   const opts = parseArgs();
+  const transport = (opts.transport || 'brewery').toLowerCase();
+  const useBrewery = transport !== 'loco';
 
   const bot = new KakaoBot({
     useSub: true,
@@ -49,7 +56,7 @@ async function main() {
       deviceName: opts.deviceName || 'SM-T733',
       modelName: opts.modelName || 'SM-T733',
       forced: opts.forced || false,
-      useBrewery: true,
+      useBrewery,
       onQrUrl: (url) => {
         console.log('\n  주 기기 카카오톡에서 아래 QR을 스캔하세요:\n');
         qrcode.generate(url, { small: true }, (qr) => {
@@ -80,6 +87,14 @@ async function main() {
         console.log('\n  Phone에서 위 번호를 확인하세요\n');
       },
     });
+
+    if (transport === 'both') {
+      try {
+        await bot.connect();
+      } catch (err) {
+        console.error('[!] LOCO connect failed:', err.message);
+      }
+    }
 
     saveAuth({
       userId: bot.userId,

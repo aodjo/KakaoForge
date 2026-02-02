@@ -11,7 +11,7 @@ const { prompt, runBot, loadAuth } = require('./_common');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { watchIds: [] };
+  const opts = { watchIds: [], transport: 'brewery' };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--user-id': case '-i':     opts.userId = parseInt(args[++i]); break;
@@ -20,6 +20,10 @@ function parseArgs() {
       case '--debug': case '-d':       opts.debug = true; break;
       case '--watch': case '-w':       opts.watchIds.push(args[++i]); break;
       case '--sync-interval':          opts.syncInterval = parseInt(args[++i]); break;
+      case '--transport':             opts.transport = (args[++i] || '').toLowerCase(); break;
+      case '--loco':                  opts.transport = 'loco'; break;
+      case '--both':                  opts.transport = 'both'; break;
+      case '--brewery':               opts.transport = 'brewery'; break;
       case '--help': case '-h':
         console.log(`사용법: node cli/token.js [옵션]
 
@@ -37,6 +41,7 @@ auth.json은 cli/qr.js 로그인 시 자동 생성됩니다.
 
 예시:
   node cli/token.js -w 12345 -w 67890 --sync-interval 5000`);
+        console.log('Transport: --transport <brewery|loco|both> (default: brewery), --loco, --both');
         process.exit(0);
     }
   }
@@ -45,6 +50,7 @@ auth.json은 cli/qr.js 로그인 시 자동 생성됩니다.
 
 async function main() {
   const opts = parseArgs();
+  const transport = (opts.transport || 'brewery').toLowerCase();
 
   let userId, oauthToken, deviceUuid;
 
@@ -75,7 +81,18 @@ async function main() {
   });
 
   try {
-    await bot.connectBrewery();
+    if (transport === 'loco') {
+      await bot.connect();
+    } else {
+      await bot.connectBrewery();
+      if (transport === 'both') {
+        try {
+          await bot.connect();
+        } catch (err) {
+          console.error('[!] LOCO connect failed:', err.message);
+        }
+      }
+    }
 
     // Auto-watch chat rooms if specified via CLI
     if (opts.watchIds.length > 0) {
