@@ -47,7 +47,12 @@ class KakaoBot extends EventEmitter {
     this._messageHandler = null;
     this._pushHandlers = new Map();
     this._breweryEventHandlers = new Map();
-    this._chatRooms = new Map(); // chatId → info cache
+    this._chatRooms = new Map(); // chatId → { lastLogId, ... }
+
+    // Message sync polling
+    this._syncTimer = null;
+    this._syncInterval = config.syncInterval || 3000; // 3s default
+    this._syncChatIds = new Set(); // chatIds to poll
   }
 
   /**
@@ -408,6 +413,150 @@ class KakaoBot extends EventEmitter {
     this._pushHandlers.set(method, handler);
   }
 
+  // ─── Message Sync (Sub-device REST polling) ──────────────────────
+
+  /**
+   * Fetch messages from a chat room via Brewery REST API.
+   * Sub-devices use this instead of LOCO push for message reception.
+   *
+   * @param {number|string} chatId - Chat room ID
+   * @param {Object} [opts]
+   * @param {number} [opts.since=0] - Fetch messages after this logId
+   * @param {number} [opts.count=50] - Number of messages to fetch
+   * @returns {Promise<Array>} Array of LogMeta objects
+   */
+  async syncMessages(chatId, { since = 0, count = 50 } = {}) {
+    if (!this._brewery) throw new Error('Brewery not connected');
+
+    const room = this._chatRooms.get(String(chatId)) || {};
+    const cur = since || room.lastLogId || 0;
+
+    const result = await this._brewery.syncMessages(chatId, { cur, cnt: count });
+
+    // Process and emit new messages
+    if (result.content && result.content.length > 0) {
+      let maxLogId = cur;
+      for (const meta of result.content) {
+        if (meta.logId > cur) {
+          this._emitMessage({
+            chatId: meta.chatId || Number(chatId),
+            chatLog: {
+              logId: meta.logId,
+              chatId: meta.chatId || Number(chatId),
+              type: meta.type || 1,
+              message: meta.content || '',
+              extra: meta.extra,
+              linkId: meta.linkId,
+              revision: meta.revision,
+            },
+          });
+        }
+        if (meta.logId > maxLogId) maxLogId = meta.logId;
+      }
+
+      // Update cursor
+      this._chatRooms.set(String(chatId), { ...room, lastLogId: maxLogId });
+    }
+
+    return result;
+  }
+
+  /**
+   * Fetch message metadata for a specific range.
+   *
+   * @param {number|string} chatId
+   * @param {number} from - Start logId
+   * @param {number} to - End logId
+   * @param {boolean} [desc=false]
+   * @returns {Promise<Object>} { content: [LogMeta], size, last }
+   */
+  async getMessages(chatId, from, to, desc = false) {
+    if (!this._brewery) throw new Error('Brewery not connected');
+    return await this._brewery.getMessages(chatId, from, to, desc);
+  }
+
+  /**
+   * Add a chat room to the polling list.
+   * Messages will be fetched periodically via syncMessages().
+   *
+   * @param {number|string} chatId
+   * @param {number} [lastLogId=0] - Start polling from this logId
+   */
+  watchChat(chatId, lastLogId = 0) {
+    const key = String(chatId);
+    this._syncChatIds.add(key);
+    if (lastLogId) {
+      this._chatRooms.set(key, { ...this._chatRooms.get(key), lastLogId });
+    }
+    console.log(`[+] Watching chat ${chatId} (from logId=${lastLogId})`);
+  }
+
+  /**
+   * Remove a chat room from the polling list.
+   */
+  unwatchChat(chatId) {
+    this._syncChatIds.delete(String(chatId));
+  }
+
+  /**
+   * Start periodic message polling for watched chats.
+   * @param {number} [intervalMs] - Poll interval (default: syncInterval from config)
+   */
+  startSync(intervalMs) {
+    this.stopSync();
+    const interval = intervalMs || this._syncInterval;
+
+    this._syncTimer = setInterval(async () => {
+      for (const chatId of this._syncChatIds) {
+        try {
+          await this.syncMessages(chatId);
+        } catch (err) {
+          if (this.debug) {
+            console.error(`[DBG] Sync error for chat ${chatId}:`, err.message);
+          }
+        }
+      }
+    }, interval);
+
+    console.log(`[+] Message sync started (interval=${interval}ms, chats=${this._syncChatIds.size})`);
+  }
+
+  /**
+   * Stop periodic message polling.
+   */
+  stopSync() {
+    if (this._syncTimer) {
+      clearInterval(this._syncTimer);
+      this._syncTimer = null;
+    }
+  }
+
+  /**
+   * Fetch chat tab settings to discover chat rooms with updates.
+   * @param {number} [revision=0]
+   * @returns {Promise<Object>}
+   */
+  async getChatTabSettings(revision = 0) {
+    if (!this._brewery) throw new Error('Brewery not connected');
+    return await this._brewery.getChatTabSettings(revision);
+  }
+
+  /**
+   * Fetch chat room list via Brewery.
+   * Returns { items: [{ chatId, title, type, count, joined, displayMembers, ... }], hasMore }
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.verticalType]
+   * @param {string} [opts.status]
+   * @returns {Promise<Object>}
+   */
+  async getChatList(opts = {}) {
+    if (!this._brewery) throw new Error('Brewery not connected');
+    return await this._brewery.getChatList(opts);
+  }
+
+  // ─── Message Sending ────────────────────────────────────────────
+
   /**
    * Send a text message to a chatroom.
    * Tries Brewery first, falls back to LOCO if available.
@@ -508,6 +657,7 @@ class KakaoBot extends EventEmitter {
   }
 
   disconnect() {
+    this.stopSync();
     if (this._booking) this._booking.disconnect();
     if (this._carriage) this._carriage.disconnect();
     if (this._brewery) {

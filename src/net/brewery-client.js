@@ -326,6 +326,101 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
+   * Parse JSON response body, returning null on failure.
+   */
+  _parseJson(res) {
+    try {
+      return JSON.parse(res.body.toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fetch message metadata from a chat using bubble/sync-meta.
+   * Used by sub-devices to sync messages via REST polling.
+   *
+   * @param {number|string} chatId - Chat room ID
+   * @param {Object} [opts]
+   * @param {number} [opts.cur=0] - Current cursor position (start from this logId)
+   * @param {number} [opts.max=0] - Max logId to fetch up to (0 = latest)
+   * @param {number} [opts.cnt=50] - Number of messages to fetch
+   * @returns {Promise<{content: Array, size: number, last: boolean}>}
+   */
+  async syncMessages(chatId, { cur = 0, max = 0, cnt = 50 } = {}) {
+    const path = `/messaging/chats/${chatId}/bubble/sync-meta?cur=${cur}&max=${max}&cnt=${cnt}`;
+    const res = await this.request('GET', path, { timeout: 15000 });
+
+    if (res.status !== 200) {
+      throw new Error(`syncMessages failed: status=${res.status}`);
+    }
+
+    return this._parseJson(res) || { content: [], size: 0, last: true };
+  }
+
+  /**
+   * Fetch message metadata for a range of logIds.
+   *
+   * @param {number|string} chatId - Chat room ID
+   * @param {number} from - Start logId
+   * @param {number} to - End logId
+   * @param {boolean} [desc=false] - Descending order
+   * @returns {Promise<{content: Array, size: number, last: boolean}>}
+   */
+  async getMessages(chatId, from, to, desc = false) {
+    const path = `/messaging/chats/${chatId}/bubble/meta?from=${from}&to=${to}&desc=${desc}`;
+    const res = await this.request('GET', path, { timeout: 15000 });
+
+    if (res.status !== 200) {
+      throw new Error(`getMessages failed: status=${res.status}`);
+    }
+
+    return this._parseJson(res) || { content: [], size: 0, last: true };
+  }
+
+  /**
+   * Fetch chat tab settings (used to detect new messages across chats).
+   *
+   * @param {number} [revision=0] - Last known revision
+   * @returns {Promise<Object>}
+   */
+  async getChatTabSettings(revision = 0) {
+    const path = `/chat/tab/settings?revision=${revision}`;
+    const res = await this.request('GET', path, { timeout: 15000 });
+
+    if (res.status !== 200) {
+      throw new Error(`getChatTabSettings failed: status=${res.status}`);
+    }
+
+    return this._parseJson(res);
+  }
+
+  /**
+   * Fetch chat room list (DrawerService: chat/list).
+   * Returns NavigationResponse: { items: [NavigationItem], hasMore: boolean }
+   * NavigationItem: { chatId, title, type, count, size, joined, displayMembers, ... }
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.verticalType] - Vertical type filter
+   * @param {string} [opts.status] - Status filter
+   * @returns {Promise<Object>}
+   */
+  async getChatList({ verticalType = '', status = '' } = {}) {
+    const params = new URLSearchParams();
+    if (verticalType) params.set('verticalType', verticalType);
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    const path = `/chat/list${qs ? '?' + qs : ''}`;
+    const res = await this.request('GET', path, { timeout: 15000 });
+
+    if (res.status !== 200) {
+      throw new Error(`getChatList failed: status=${res.status}`);
+    }
+
+    return this._parseJson(res) || { items: [], hasMore: false };
+  }
+
+  /**
    * Disconnect everything.
    */
   disconnect() {

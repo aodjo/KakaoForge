@@ -81,6 +81,11 @@ function runBot(bot) {
 
   console.log('\n봇이 실행 중입니다. 명령어:');
   console.log('  send <chatId> <메시지>   - 메시지 전송');
+  console.log('  watch <chatId>           - 채팅방 메시지 폴링 시작');
+  console.log('  unwatch <chatId>         - 채팅방 폴링 중지');
+  console.log('  sync <chatId> [count]    - 채팅방 메시지 한번 동기화');
+  console.log('  chats                    - 채팅 탭 설정 조회');
+  console.log('  watching                 - 폴링 중인 채팅방 목록');
   console.log('  debug                    - 디버그 모드 토글');
   console.log('  status                   - 연결 상태');
   console.log('  quit                     - 종료\n');
@@ -124,8 +129,87 @@ function runBot(bot) {
           console.error('[!] 전송 실패:', err.message);
         }
       }
+    } else if (trimmed.startsWith('watch ')) {
+      const chatId = trimmed.substring(6).trim();
+      if (!chatId) {
+        console.log('사용법: watch <chatId>');
+      } else {
+        bot.watchChat(chatId);
+        if (!bot._syncTimer) {
+          bot.startSync();
+        }
+        console.log(`[+] 채팅방 ${chatId} 폴링 시작`);
+      }
+    } else if (trimmed.startsWith('unwatch ')) {
+      const chatId = trimmed.substring(8).trim();
+      if (!chatId) {
+        console.log('사용법: unwatch <chatId>');
+      } else {
+        bot.unwatchChat(chatId);
+        console.log(`[-] 채팅방 ${chatId} 폴링 중지`);
+      }
+    } else if (trimmed.startsWith('sync ')) {
+      const parts = trimmed.substring(5).trim().split(/\s+/);
+      const chatId = parts[0];
+      const count = parseInt(parts[1]) || 50;
+      if (!chatId) {
+        console.log('사용법: sync <chatId> [count]');
+      } else {
+        try {
+          console.log(`[*] 채팅방 ${chatId} 동기화 중 (count=${count})...`);
+          const result = await bot.syncMessages(chatId, { count });
+          console.log(`[+] 동기화 완료: ${result.content ? result.content.length : 0}개 메시지, size=${result.size}, last=${result.last}`);
+          if (result.content) {
+            for (const meta of result.content) {
+              const preview = (meta.content || '').substring(0, 100);
+              console.log(`  logId=${meta.logId} type=${meta.type} chatId=${meta.chatId}: ${preview}`);
+            }
+          }
+        } catch (err) {
+          console.error('[!] 동기화 실패:', err.message);
+        }
+      }
+    } else if (trimmed === 'chats' || trimmed === 'chatlist') {
+      try {
+        console.log('[*] 채팅방 목록 조회 중...');
+        const result = await bot.getChatList();
+        if (result.items && result.items.length > 0) {
+          console.log(`[+] 채팅방 ${result.items.length}개 (hasMore=${result.hasMore}):`);
+          for (const item of result.items) {
+            const members = item.displayMembers
+              ? item.displayMembers.map(m => m.nickName).join(', ')
+              : '';
+            console.log(`  chatId=${item.chatId} title="${item.title || ''}" joined=${item.joined} members=[${members}]`);
+          }
+        } else {
+          console.log('[*] 채팅방 목록이 비어있거나 지원되지 않는 엔드포인트입니다.');
+          console.log('[*] raw:', JSON.stringify(result, null, 2));
+        }
+      } catch (err) {
+        console.error('[!] chatList 실패:', err.message);
+        // Fallback: try chat tab settings
+        try {
+          console.log('[*] chat/tab/settings 시도 중...');
+          const tabResult = await bot.getChatTabSettings();
+          console.log('[+] 채팅 탭 설정:', JSON.stringify(tabResult, null, 2));
+        } catch (err2) {
+          console.error('[!] 탭 설정도 실패:', err2.message);
+        }
+      }
+    } else if (trimmed === 'watching') {
+      const ids = [...bot._syncChatIds];
+      if (ids.length === 0) {
+        console.log('[*] 폴링 중인 채팅방 없음');
+      } else {
+        console.log(`[*] 폴링 중인 채팅방 (${ids.length}개):`);
+        for (const id of ids) {
+          const room = bot._chatRooms.get(id) || {};
+          console.log(`  chatId=${id} lastLogId=${room.lastLogId || 0}`);
+        }
+      }
+      console.log(`[*] 동기화 타이머: ${bot._syncTimer ? 'ON' : 'OFF'}`);
     } else {
-      console.log('알 수 없는 명령어. send / debug / status / quit 사용 가능');
+      console.log('알 수 없는 명령어. send / watch / unwatch / sync / chats / watching / debug / status / quit');
     }
 
     rl.prompt();

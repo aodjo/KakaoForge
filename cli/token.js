@@ -11,13 +11,15 @@ const { prompt, runBot, loadAuth } = require('./_common');
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = {};
+  const opts = { watchIds: [] };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--user-id': case '-i':     opts.userId = parseInt(args[++i]); break;
       case '--token': case '-t':       opts.oauthToken = args[++i]; break;
       case '--uuid': case '-u':        opts.deviceUuid = args[++i]; break;
       case '--debug': case '-d':       opts.debug = true; break;
+      case '--watch': case '-w':       opts.watchIds.push(args[++i]); break;
+      case '--sync-interval':          opts.syncInterval = parseInt(args[++i]); break;
       case '--help': case '-h':
         console.log(`사용법: node cli/token.js [옵션]
 
@@ -26,10 +28,15 @@ function parseArgs() {
   -t, --token <token>     OAuth 액세스 토큰
   -u, --uuid <uuid>       디바이스 UUID
   -d, --debug             디버그 모드 (모든 이벤트 로깅)
+  -w, --watch <chatId>    채팅방 메시지 폴링 (여러번 사용 가능)
+  --sync-interval <ms>    폴링 간격 (기본: 3000ms)
   -h, --help              도움말
 
 옵션 미지정 시 auth.json에서 저장된 토큰을 로드합니다.
-auth.json은 cli/qr.js 로그인 시 자동 생성됩니다.`);
+auth.json은 cli/qr.js 로그인 시 자동 생성됩니다.
+
+예시:
+  node cli/token.js -w 12345 -w 67890 --sync-interval 5000`);
         process.exit(0);
     }
   }
@@ -64,10 +71,20 @@ async function main() {
     deviceUuid,
     useSub: true,
     debug: opts.debug || false,
+    syncInterval: opts.syncInterval || 3000,
   });
 
   try {
     await bot.connectBrewery();
+
+    // Auto-watch chat rooms if specified via CLI
+    if (opts.watchIds.length > 0) {
+      for (const chatId of opts.watchIds) {
+        bot.watchChat(chatId);
+      }
+      bot.startSync();
+    }
+
     runBot(bot);
   } catch (err) {
     console.error('\n연결 실패:', err.message);
