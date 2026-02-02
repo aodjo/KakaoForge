@@ -1,5 +1,6 @@
 const net = require('net');
 const { EventEmitter } = require('events');
+const { Long } = require('bson');
 const { LocoPacket, HEADER_SIZE } = require('../protocol/loco-packet');
 const { V2SLCrypto } = require('../crypto/v2sl');
 
@@ -185,13 +186,31 @@ class CarriageClient extends EventEmitter {
   /**
    * Send a message to a chatroom.
    */
-  async write(chatId, text, type = 1) {
-    return await this.request('WRITE', {
-      chatId,
+  async write(chatId, text, type = 1, opts = {}) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatId: toLong(chatId),
       msg: text,
       type,
-      noSeen: false,
-    });
+      noSeen: !!opts.noSeen,
+      scope: typeof opts.scope === 'number' ? opts.scope : 0,
+      silence: !!(opts.silence || opts.isSilence),
+    };
+
+    if (opts.msgId !== undefined && opts.msgId !== null && Number(opts.msgId) > 0) {
+      body.msgId = toLong(opts.msgId);
+    }
+    if (opts.supplement) body.supplement = opts.supplement;
+    if (opts.from) body.from = opts.from;
+    if (opts.extra) body.extra = opts.extra;
+    if (opts.threadId !== undefined && opts.threadId !== null) body.threadId = toLong(opts.threadId);
+    if (opts.featureStat) body.featureStat = opts.featureStat;
+
+    return await this.request('WRITE', body);
   }
 
   /**

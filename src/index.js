@@ -3,6 +3,7 @@ const { BookingClient } = require('./net/booking-client');
 const { CarriageClient } = require('./net/carriage-client');
 const { BreweryClient } = require('./net/brewery-client');
 const { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } = require('./auth/login');
+const { nextClientMsgId } = require('./util/client-msg-id');
 
 /**
  * KakaoForge Bot - KakaoTalk bot framework.
@@ -53,6 +54,11 @@ class KakaoBot extends EventEmitter {
     this._syncTimer = null;
     this._syncInterval = config.syncInterval || 3000; // 3s default
     this._syncChatIds = new Set(); // chatIds to poll
+  }
+
+  _nextClientMsgId() {
+    const seed = this.deviceUuid || String(this.userId || '');
+    return nextClientMsgId(seed);
   }
 
   /**
@@ -561,11 +567,36 @@ class KakaoBot extends EventEmitter {
    * @param {number|string} chatId - Chat room ID
    * @param {string} text - Message text
    * @param {number} [type=1] - Message type (1=text)
+   * @param {Object} [opts]
+   * @param {number} [opts.msgId] - Client message ID
+   * @param {boolean} [opts.noSeen=false] - Do not mark as read
+   * @param {string} [opts.supplement]
+   * @param {string} [opts.from]
+   * @param {string} [opts.extra]
+   * @param {number} [opts.scope=0]
+   * @param {number} [opts.threadId]
+   * @param {string} [opts.featureStat]
+   * @param {boolean} [opts.silence=false]
    */
-  async sendMessage(chatId, text, type = 1) {
+  async sendMessage(chatId, text, type = 1, opts = {}) {
+    if (type && typeof type === 'object') {
+      opts = type;
+      type = typeof opts.type === 'number' ? opts.type : 1;
+    }
+    if (!opts || typeof opts !== 'object') opts = {};
+
+    const msgId = opts.msgId !== undefined && opts.msgId !== null ? opts.msgId : this._nextClientMsgId();
+    const writeOpts = {
+      ...opts,
+      msgId,
+      noSeen: opts.noSeen ?? false,
+      scope: typeof opts.scope === 'number' ? opts.scope : 0,
+      silence: opts.silence ?? opts.isSilence ?? false,
+    };
+
     // Try LOCO first (if connected)
     if (this._carriage) {
-      return await this._carriage.write(chatId, text, type);
+      return await this._carriage.write(chatId, text, type, writeOpts);
     }
 
     // Brewery mode: try POST endpoint (experimental)
