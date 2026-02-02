@@ -55,11 +55,23 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Common headers for all brewery requests.
+   * Common headers for all brewery requests (PILSNER auth).
    */
   _headers(extra = {}) {
     return {
       'authorization': `${this._oauthToken}-${this._deviceUuid}`,
+      'talk-agent': `android/${this._appVer}`,
+      'talk-language': this._lang,
+      ...extra,
+    };
+  }
+
+  /**
+   * Headers for Drawer requests (MALDIVE auth).
+   */
+  _drawerHeaders(extra = {}) {
+    return {
+      'authorization': `MALDIVE ${this._oauthToken}`,
       'talk-agent': `android/${this._appVer}`,
       'talk-language': this._lang,
       ...extra,
@@ -396,7 +408,8 @@ class BreweryClient extends EventEmitter {
   }
 
   /**
-   * Fetch chat room list (DrawerService: chat/list).
+   * Fetch chat room list (DrawerService: /drawer/chat/list).
+   * Uses MALDIVE auth instead of standard PILSNER auth.
    * Returns NavigationResponse: { items: [NavigationItem], hasMore: boolean }
    * NavigationItem: { chatId, title, type, count, size, joined, displayMembers, ... }
    *
@@ -410,8 +423,11 @@ class BreweryClient extends EventEmitter {
     if (verticalType) params.set('verticalType', verticalType);
     if (status) params.set('status', status);
     const qs = params.toString();
-    const path = `/chat/list${qs ? '?' + qs : ''}`;
-    const res = await this.request('GET', path, { timeout: 15000 });
+    const path = `/drawer/chat/list${qs ? '?' + qs : ''}`;
+    const res = await this.request('GET', path, {
+      headers: { 'authorization': `MALDIVE ${this._oauthToken}` },
+      timeout: 15000,
+    });
 
     if (res.status !== 200) {
       throw new Error(`getChatList failed: status=${res.status}`);
