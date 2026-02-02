@@ -218,6 +218,77 @@ function runBot(bot) {
           console.log(`  ERR ${p} → ${err.message}`);
         }
       }
+    } else if (trimmed.startsWith('sendprobe')) {
+      const chatId = trimmed.substring(9).trim() || '455007773985318';
+      const path = `/messaging/chats/${chatId}/messages`;
+      const bodies = [
+        { msg: 'test', type: 1 },
+        { message: 'test', type: 1 },
+        { content: 'test', type: 1 },
+        { text: 'test', type: 1 },
+        { msg: 'test', type: 1, chatId },
+        { message: 'test', messageType: 1 },
+        { content: 'test', msgType: 1 },
+        { body: 'test', type: 'text' },
+        { msg: 'test', type: 1, noSeen: false },
+        'msg=test&type=1',
+      ];
+      const endpoints = bodies.map((b, i) => ['POST', path, b, `body#${i}: ${JSON.stringify(b).substring(0, 60)}`]);
+      console.log(`[*] ${path} 에 ${endpoints.length}개 body 변형 시도 중...`);
+      for (const [method, p, body, label] of endpoints) {
+        try {
+          const res = await bot.breweryRequest(method, p, { body, timeout: 8000 });
+          const resp = res.body.toString('utf8').substring(0, 300);
+          console.log(`  ${res.status} ${label} → ${resp}`);
+        } catch (err) {
+          console.log(`  ERR ${label} → ${err.message}`);
+        }
+      }
+    } else if (trimmed.startsWith('loco')) {
+      // GETCONF → CHECKIN 순서로 시도
+      const { BookingClient } = require('../src/net/booking-client');
+      const { Long } = require('bson');
+      const uid = Long.fromNumber(typeof bot.userId === 'number' ? bot.userId : parseInt(bot.userId));
+      console.log(`[*] userId=${bot.userId}`);
+
+      const booking = new BookingClient();
+      await booking.connect();
+      console.log('[+] Booking 연결됨');
+
+      // Step 1: GETCONF (body: MCCMNC, os, userId만 - GetConfJob.kt 분석 결과)
+      console.log('[*] GETCONF 전송...');
+      let confBody = null;
+      try {
+        const confRes = await booking.request('GETCONF', {
+          MCCMNC: '450,05',
+          os: 'android',
+          userId: uid,
+        });
+        confBody = confRes.body;
+        console.log(`[*] GETCONF 응답: status=${confRes.status}, method=${confRes.method}`);
+        console.log('[*] GETCONF body:', JSON.stringify(confBody).substring(0, 800));
+      } catch (err) {
+        console.log(`[!] GETCONF ERR: ${err.message}`);
+      }
+
+      // Step 2: CHECKIN (body: userId, os, ntype, appVer, lang, MCCMNC - CheckInJob.kt)
+      console.log('[*] CHECKIN 전송...');
+      try {
+        const checkinRes = await booking.request('CHECKIN', {
+          userId: uid,
+          os: 'android',
+          ntype: 0,
+          appVer: '26.1.2',
+          lang: 'ko',
+          MCCMNC: '450,05',
+        });
+        console.log(`[*] CHECKIN 응답: status=${checkinRes.status}, method=${checkinRes.method}`);
+        console.log('[*] CHECKIN body:', JSON.stringify(checkinRes.body).substring(0, 800));
+      } catch (err) {
+        console.log(`[!] CHECKIN ERR: ${err.message}`);
+      }
+
+      booking.disconnect();
     } else if (trimmed === 'watching') {
       const ids = [...bot._syncChatIds];
       if (ids.length === 0) {
