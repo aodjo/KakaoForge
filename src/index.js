@@ -1,9 +1,21 @@
 const { EventEmitter } = require('events');
 const { BookingClient } = require('./net/booking-client');
 const { CarriageClient } = require('./net/carriage-client');
+const { TicketClient } = require('./net/ticket-client');
 const { BreweryClient } = require('./net/brewery-client');
 const { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } = require('./auth/login');
 const { nextClientMsgId } = require('./util/client-msg-id');
+
+function uniqueStrings(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.map((v) => String(v).trim()).filter(Boolean))];
+}
+
+function uniqueNumbers(list) {
+  if (!Array.isArray(list)) return [];
+  const nums = list.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0);
+  return [...new Set(nums)];
+}
 
 /**
  * KakaoForge Bot - KakaoTalk bot framework.
@@ -28,6 +40,10 @@ class KakaoBot extends EventEmitter {
     this.os = config.os || 'android';
     this.appVer = config.appVer || '26.1.2';
     this.lang = config.lang || 'ko';
+    this.mccmnc = config.mccmnc || config.MCCMNC || '45005';
+    this.ntype = typeof config.ntype === 'number'
+      ? config.ntype
+      : (typeof config.networkType === 'number' ? config.networkType : 0);
 
     // Sub-device mode: connects as secondary device (phone stays logged in)
     this.useSub = config.useSub !== undefined ? config.useSub : true;
@@ -174,22 +190,78 @@ class KakaoBot extends EventEmitter {
       throw new Error('No OAuth token. Call login() first or set oauthToken in constructor.');
     }
 
-    // Step 1: Booking - CHECKIN
+    // Step 1: Booking - GETCONF
     console.log('[*] Connecting to Booking server...');
     this._booking = new BookingClient();
     await this._booking.connect();
     console.log('[+] Connected to Booking server');
 
-    const checkinResult = await this._booking.checkin({
-      userId: this.userId,
-      os: this.os,
-      appVer: this.appVer,
-      lang: this.lang,
-      useSub: this.useSub,
-    });
-    console.log(`[+] CHECKIN response:`, JSON.stringify(checkinResult, null, 2));
+    let checkinResult = null;
+    try {
+      let conf = null;
+      try {
+        conf = await this._booking.getConf({
+          userId: this.userId,
+          os: this.os,
+          mccmnc: this.mccmnc,
+        });
+        const ticketHosts = [
+          ...(conf.ticket?.lsl || []),
+          ...(conf.ticket?.lsl6 || []),
+        ];
+        console.log(`[+] GETCONF response: ticketHosts=${ticketHosts.length}, wifiPorts=${conf.portsWifi.length}, cellPorts=${conf.portsCellular.length}`);
+      } catch (err) {
+        console.warn(`[!] GETCONF failed: ${err.message}`);
+      }
 
-    this._booking.disconnect();
+      if (conf) {
+        const preferCellular = this.ntype && this.ntype !== 0;
+        const hosts = uniqueStrings([
+          ...(conf.ticket?.lsl || []),
+          ...(conf.ticket?.lsl6 || []),
+        ]);
+        const primaryPorts = preferCellular ? conf.portsCellular : conf.portsWifi;
+        const fallbackPorts = preferCellular ? conf.portsWifi : conf.portsCellular;
+        let ports = uniqueNumbers([...(primaryPorts || []), ...(fallbackPorts || [])]);
+        if (hosts.length > 0 && ports.length === 0) {
+          ports = [443];
+          console.warn('[!] GETCONF returned no ports; using 443 as fallback');
+        }
+
+        if (hosts.length > 0 && ports.length > 0) {
+          try {
+            checkinResult = await this._checkinViaTicket(hosts, ports, {
+              userId: this.userId,
+              os: this.os,
+              appVer: this.appVer,
+              lang: this.lang,
+              ntype: this.ntype,
+              useSub: this.useSub,
+              mccmnc: this.mccmnc,
+            });
+          } catch (err) {
+            console.warn(`[!] Ticket CHECKIN failed: ${err.message}`);
+          }
+        }
+      }
+
+      if (!checkinResult) {
+        console.log('[*] Falling back to Booking CHECKIN...');
+        checkinResult = await this._booking.checkin({
+          userId: this.userId,
+          os: this.os,
+          appVer: this.appVer,
+          lang: this.lang,
+          ntype: this.ntype,
+          useSub: this.useSub,
+          mccmnc: this.mccmnc,
+        });
+      }
+    } finally {
+      this._booking.disconnect();
+    }
+
+    console.log(`[+] CHECKIN response:`, JSON.stringify(checkinResult, null, 2));
 
     if (!checkinResult.host || !checkinResult.port) {
       throw new Error('CHECKIN failed: no host/port received');
@@ -225,6 +297,34 @@ class KakaoBot extends EventEmitter {
     console.log('[+] Bot is ready!');
 
     return loginRes;
+  }
+
+  async _checkinViaTicket(hosts, ports, opts) {
+    let lastErr = null;
+    for (const host of hosts) {
+      for (const port of ports) {
+        const ticket = new TicketClient();
+        try {
+          console.log(`[*] Ticket CHECKIN -> ${host}:${port}`);
+          await ticket.connect(host, port);
+          const res = await ticket.checkin(opts);
+          console.log(`[+] Ticket CHECKIN response: status=${res.status}`);
+          if (res.host && res.port) {
+            return res;
+          }
+          lastErr = new Error(`Ticket CHECKIN returned no host/port (${host}:${port})`);
+        } catch (err) {
+          lastErr = err;
+          console.warn(`[!] Ticket CHECKIN error (${host}:${port}): ${err.message}`);
+        } finally {
+          ticket.disconnect();
+        }
+      }
+    }
+    if (lastErr) {
+      throw lastErr;
+    }
+    throw new Error('Ticket CHECKIN failed: no endpoints attempted');
   }
 
   /**
