@@ -268,12 +268,14 @@ function normalizePathInput(input: string) {
   out = out.replace(/^[`"']+/, '').replace(/[`"']+$/, '').trim();
   out = out.replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
   out = out.replace(/\\\\/g, '\\');
+  out = out.replace(/[\x00-\x1F\x7F]/g, '');
   if (out.startsWith('file://')) {
     out = out.replace(/^file:\/\//, '');
     if (/^\/[A-Za-z]:\//.test(out)) {
       out = out.slice(1);
     }
   }
+  out = path.normalize(out);
   return out;
 }
 
@@ -1715,21 +1717,25 @@ export class KakaoForgeClient extends EventEmitter {
         return attachment;
       }
       const normalizedPath = normalizePathInput(attachment);
-      if (normalizedPath && normalizedPath !== attachment) {
-        attachment = normalizedPath;
-      }
-      try {
-        if (fs.existsSync(attachment)) {
-          const stat = fs.statSync(attachment);
+      const candidates: string[] = [];
+      if (normalizedPath) candidates.push(normalizedPath);
+      if (attachment && attachment !== normalizedPath) candidates.push(attachment);
+      const resolved = normalizedPath ? path.resolve(normalizedPath) : '';
+      if (resolved && !candidates.includes(resolved)) candidates.push(resolved);
+
+      for (const candidate of candidates) {
+        try {
+          const stat = fs.statSync(candidate);
           if (stat.isFile()) {
-            return await this._uploadMedia(type, attachment, opts);
+            return await this._uploadMedia(type, candidate, opts);
           }
+        } catch {
+          // try next candidate
         }
-      } catch {
-        // ignore file lookup errors and fall back to raw attachment
       }
+
       if (trimmed.length > 0) {
-        throw new Error(`file not found: ${attachment}`);
+        throw new Error(`file not found: ${normalizedPath || attachment}`);
       }
     }
     return attachment;
