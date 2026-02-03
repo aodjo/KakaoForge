@@ -1695,15 +1695,16 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _prepareMediaAttachment(type: UploadMediaType, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
     if (typeof attachment === 'string') {
+      let stat: fs.Stats;
       try {
-        const stat = fs.statSync(attachment);
-        if (stat.isFile()) {
-          return await this._uploadMedia(type, attachment, opts);
-        }
+        stat = fs.statSync(attachment);
       } catch {
-        // fall through
+        throw new Error(`file not found: ${attachment}`);
       }
-      throw new Error(`file not found: ${attachment}`);
+      if (!stat.isFile()) {
+        throw new Error(`not a file: ${attachment}`);
+      }
+      return await this._uploadMedia(type, attachment, opts);
     }
     return attachment;
   }
