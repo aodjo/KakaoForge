@@ -295,6 +295,15 @@ function extractShareMessageData(body: any) {
   return data;
 }
 
+function normalizeScheduleShareData(data: any) {
+  if (!data) return data;
+  if (Array.isArray(data)) return data;
+  if (typeof data === 'object') {
+    if (data.P || data.CAL || data.C) return [data];
+  }
+  return data;
+}
+
 function extractEventId(body: any) {
   const eId = body?.eId || body?.eventId || body?.data?.eId || body?.data?.eventId || body?.result?.eId;
   if (eId === undefined || eId === null) return '';
@@ -1700,6 +1709,7 @@ export class KakaoForgeClient extends EventEmitter {
     const shareRes = await runCalendar(() => calendar.shareMessage(eId, referer));
     assertCalendarOk(shareRes, '일정 공유');
     let attachment = extractShareMessageData(shareRes?.body);
+    attachment = normalizeScheduleShareData(attachment);
 
     const scheduleIdCandidate = parseInt(String(eId).split('_')[0], 10);
     const scheduleId = Number.isFinite(scheduleIdCandidate) ? scheduleIdCandidate : undefined;
