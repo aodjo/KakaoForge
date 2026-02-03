@@ -1693,6 +1693,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     const result = await refreshOAuthToken({
       refreshToken: this.refreshToken,
+      accessToken: this.oauthToken,
       deviceUuid: this.deviceUuid,
       appVer: this.appVer,
     });

@@ -400,30 +400,37 @@ async function subDeviceLogin({
  */
 async function refreshOAuthToken({
   refreshToken,
+  accessToken,
   deviceUuid,
   appVer = DEFAULT_APP_VER,
+  lang = 'ko',
 }: any) {
-  const xvc = generateXVCHeader(deviceUuid, '');
+  if (!accessToken) {
+    throw new Error('accessToken is required for token refresh');
+  }
 
-  const formData = {
+  const jsonData = {
+    access_token: accessToken,
     refresh_token: refreshToken,
     grant_type: 'refresh_token',
   };
 
   const headers = {
+    'Authorization': buildAuthorizationHeader(accessToken, deviceUuid),
     'User-Agent': buildUserAgent(appVer),
-    'A': buildAHeader(appVer),
-    'X-VC': xvc,
+    'A': buildAHeader(appVer, lang),
+    'C': crypto.randomUUID(),
+    'Connection': 'Close',
   };
 
-  const res = await httpsPost(
+  const res = await httpsPostJson(
     KATALK_HOST,
     '/android/account/oauth2_token.json',
-    formData,
+    jsonData,
     headers,
   );
 
-  if (res.status !== 200 || (res.body.status && res.body.status !== 0)) {
+  if (res.status !== 200 || (res.body?.status && res.body.status !== 0)) {
     throw new Error(`Token refresh failed: ${JSON.stringify(res.body)}`);
   }
 
