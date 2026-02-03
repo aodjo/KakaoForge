@@ -112,6 +112,7 @@ type ChatListCursor = {
 
 type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
 
+type MemberNameCache = Map<string, Map<string, string>>;
 
 function uniqueStrings(list) {
   if (!Array.isArray(list)) return [];
@@ -169,6 +170,8 @@ export class KakaoForgeClient extends EventEmitter {
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
   _chatListCursor: ChatListCursor;
+  _memberNames: MemberNameCache;
+  _memberFetchInFlight: Set<string>;
   _connectPromise: Promise<any> | null;
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
@@ -213,6 +216,8 @@ export class KakaoForgeClient extends EventEmitter {
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
+    this._memberNames = new Map();
+    this._memberFetchInFlight = new Set();
     this._connectPromise = null;
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
@@ -567,13 +572,22 @@ export class KakaoForgeClient extends EventEmitter {
     const text = chatLog.message || chatLog.msg || chatLog.text || '';
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
     const logId = safeNumber(chatLog.logId || chatLog.msgId || 0, 0);
-    const senderName =
+    let senderName =
       chatLog.authorName ||
       chatLog.authorNickname ||
       chatLog.nickName ||
       chatLog.nickname ||
       chatLog.name ||
       '';
+
+    if (!senderName && roomId && senderId) {
+      const cached = this._getCachedMemberName(roomId, senderId);
+      if (cached) {
+        senderName = cached;
+      } else {
+        this._fetchMemberName(roomId, senderId);
+      }
+    }
 
     const roomInfo = this._chatRooms.get(String(roomId)) || {};
     const roomName = roomInfo.roomName || roomInfo.title || '';
@@ -742,6 +756,57 @@ export class KakaoForgeClient extends EventEmitter {
       };
 
       this._chatRooms.set(key, next);
+    }
+  }
+
+  _getCachedMemberName(chatId: number, userId: number) {
+    const map = this._memberNames.get(String(chatId));
+    if (!map) return '';
+    return map.get(String(userId)) || '';
+  }
+
+  _extractMemberName(member: any) {
+    return (
+      member?.nickName ||
+      member?.nickname ||
+      member?.name ||
+      member?.profileName ||
+      ''
+    );
+  }
+
+  _cacheMembers(chatId: number | string, members: any[]) {
+    if (!Array.isArray(members)) return;
+    const key = String(chatId);
+    const map = this._memberNames.get(key) || new Map<string, string>();
+    for (const mem of members) {
+      const userId = safeNumber(mem?.userId || mem?.id || mem?.memberId || mem?.user_id, 0);
+      if (!userId) continue;
+      const name = this._extractMemberName(mem);
+      if (name) {
+        map.set(String(userId), String(name));
+      }
+    }
+    if (map.size > 0) {
+      this._memberNames.set(key, map);
+    }
+  }
+
+  async _fetchMemberName(chatId: number, userId: number) {
+    if (!this._carriage) return;
+    const key = `${chatId}:${userId}`;
+    if (this._memberFetchInFlight.has(key)) return;
+    this._memberFetchInFlight.add(key);
+    try {
+      const res = await this._carriage.member(chatId, [userId]);
+      const members = res?.body?.members || res?.body?.memberList || res?.body?.memList || [];
+      this._cacheMembers(chatId, members);
+    } catch (err) {
+      if (this.debug) {
+        console.error('[DBG] member fetch failed:', err.message);
+      }
+    } finally {
+      this._memberFetchInFlight.delete(key);
     }
   }
 

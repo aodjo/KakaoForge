@@ -298,6 +298,41 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Fetch member info for specific users in a chat (MEMBER).
+   */
+  async member(chatId: number | string, memberIds: Array<number | string>) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatId: toLong(chatId),
+      memberIds: (memberIds || []).map(toLong),
+    };
+
+    return await this.request('MEMBER', body);
+  }
+
+  /**
+   * Fetch member list for a chat (MEMLIST).
+   */
+  async memList({ chatId, token = 0, excludeMe = false }: any) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatId: toLong(chatId),
+      token: toLong(token || 0),
+      excludeMe: !!excludeMe,
+    };
+
+    return await this.request('MEMLIST', body);
+  }
+
+  /**
    * Send PING to keep connection alive.
    */
   async ping() {
