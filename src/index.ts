@@ -55,7 +55,7 @@ export type SendOptions = {
 
 export type AttachmentInput = Record<string, any> | string | UploadResult | { attachment: any };
 
-export type AttachmentSendOptions = SendOptions & {
+export type AttachmentSendOptions = SendOptions & UploadOptions & {
   text?: string;
 };
 
@@ -1692,27 +1692,47 @@ export class KakaoForgeClient extends EventEmitter {
     return this.sendMessage(chatId, text || '', { ...sendOpts, type, extra });
   }
 
+  async _prepareMediaAttachment(type: UploadMediaType, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+    if (typeof attachment === 'string') {
+      try {
+        if (fs.existsSync(attachment)) {
+          const stat = fs.statSync(attachment);
+          if (stat.isFile()) {
+            return await this._uploadMedia(type, attachment, opts);
+          }
+        }
+      } catch {
+        // ignore file lookup errors and fall back to raw attachment
+      }
+    }
+    return attachment;
+  }
+
   async sendText(chatId: number | string, text: string, opts: SendOptions = {}) {
     return this.sendMessage(chatId, text, MessageType.Text, opts);
   }
 
   async sendPhoto(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
+    const prepared = await this._prepareMediaAttachment('photo', attachment, opts);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, opts, 'photo');
   }
 
   async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
+    const prepared = await this._prepareMediaAttachment('video', attachment, opts);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, opts, 'video');
   }
 
   async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
+    const prepared = await this._prepareMediaAttachment('audio', attachment, opts);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, opts, 'audio');
   }
 
   async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeFileAttachment(unwrapAttachment(attachment));
+    const prepared = await this._prepareMediaAttachment('file', attachment, opts);
+    const normalized = normalizeFileAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, opts, 'file');
   }
 
