@@ -302,15 +302,37 @@ function ensureScheduleAttachment(base: any, fallback: any) {
   return result;
 }
 
+function previewCalendarBody(body: any, limit = 800) {
+  if (body === undefined || body === null) return '';
+  let text = '';
+  if (typeof body === 'string') {
+    text = body;
+  } else {
+    try {
+      text = JSON.stringify(body);
+    } catch {
+      text = String(body);
+    }
+  }
+  if (limit > 0 && text.length > limit) {
+    return `${text.slice(0, limit)}...`;
+  }
+  return text;
+}
+
 function assertCalendarOk(res: any, label: string) {
   const statusCode = res?.status;
   if (typeof statusCode === 'number' && statusCode >= 400) {
-    throw new Error(`${label} HTTP ${statusCode}`);
+    const bodyPreview = previewCalendarBody(res?.body);
+    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
+    throw new Error(`${label} status=${statusCode}${suffix}`);
   }
   const body = res?.body;
   if (body && typeof body === 'object' && typeof body.status === 'number' && body.status !== 0) {
     const message = body.message ? ` (${body.message})` : '';
-    throw new Error(`${label} status=${body.status}${message}`);
+    const bodyPreview = previewCalendarBody(body);
+    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
+    throw new Error(`${label} status=${body.status}${message}${suffix}`);
   }
 }
 
