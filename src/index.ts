@@ -1891,11 +1891,7 @@ export function createClient(config: KakaoForgeConfig = {}) {
 
 export const KakaoBot = KakaoForgeClient;
 
-export { AttachmentTypes } from './types/attachments';
 export { MessageType } from './types/message';
 
-export type {
-  AttachmentType,
-} from './types/attachments';
 export type { MessageTypeValue } from './types/message';
 export type KakaoBot = KakaoForgeClient;
