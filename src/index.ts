@@ -1740,6 +1740,15 @@ export class KakaoForgeClient extends EventEmitter {
       attachment = { ...attachment, ...payload.extra };
     }
 
+    const forceWrite = !!(opts as any).forceWrite;
+    if (!forceWrite) {
+      return {
+        eventId: eId,
+        share: shareRes?.body ?? shareRes,
+        attachment,
+      };
+    }
+
     return this._sendWithAttachment(
       chatId,
       MessageType.Schedule,
