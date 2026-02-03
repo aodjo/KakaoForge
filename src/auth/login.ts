@@ -184,13 +184,13 @@ function buildAHeader(appVer = DEFAULT_APP_VER, lang = 'ko') {
  * Build Authorization header for KakaoTalk API (accessToken + deviceUuid).
  *
  * From decompiled: BO/d.java (OauthHelper)
- * Format: "{accessToken} {deviceUuid}"
+ * Format: "{accessToken}-{deviceUuid}"
  */
 function buildAuthorizationHeader(accessToken, deviceUuid) {
   if (!accessToken || !deviceUuid) {
     throw new Error('accessToken and deviceUuid are required for Authorization header');
   }
-  return `${accessToken} ${deviceUuid}`;
+  return `${accessToken}-${deviceUuid}`;
 }
 
 /**
