@@ -494,7 +494,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
     this.adid = config.adid || this.deviceUuid || '';
     this.dtype = config.dtype !== undefined && config.dtype !== null ? String(config.dtype) : '1';
-    this.deviceId = config.deviceId || buildDeviceId(this.deviceUuid);
+    this.deviceId = config.deviceId || (this.deviceUuid ? buildDeviceId(this.deviceUuid) : '');
 
     // Sub-device mode only: always connect as secondary device
     this.useSub = true;
