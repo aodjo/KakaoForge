@@ -10,6 +10,20 @@ import { nextClientMsgId } from './util/client-msg-id';
 
 export type TransportMode = 'loco' | null;
 
+export const MessageType = {
+  Text: 1,
+  Photo: 2,
+  Video: 3,
+  Contact: 4,
+  Audio: 5,
+  Link: 9,
+  Schedule: 13,
+  Location: 16,
+  File: 18,
+} as const;
+
+export type MessageTypeValue = typeof MessageType[keyof typeof MessageType];
+
 export type MessageEvent = {
   message: {
     id: number;
@@ -46,6 +60,48 @@ export type SendOptions = {
   silence?: boolean;
   isSilence?: boolean;
   type?: number;
+};
+
+export type AttachmentInput = Record<string, any> | string;
+
+export type AttachmentSendOptions = SendOptions & {
+  text?: string;
+};
+
+export type LocationPayload = {
+  lat: number;
+  lng: number;
+  address?: string;
+  title?: string;
+  isCurrent?: boolean;
+  placeId?: number | string;
+  extra?: Record<string, any>;
+};
+
+export type SchedulePayload = {
+  eventAt: number | Date;
+  title: string;
+  postId?: number | string;
+  scheduleId?: number | string;
+  subtype?: number;
+  alarmAt?: number | Date;
+  extra?: Record<string, any>;
+};
+
+export type ContactPayload = {
+  name: string;
+  phone?: string;
+  phones?: string[];
+  email?: string;
+  vcard?: string;
+  extra?: Record<string, any>;
+};
+
+export type LinkPayload = {
+  url?: string;
+  text?: string;
+  attachment?: AttachmentInput;
+  extra?: Record<string, any>;
 };
 
 export type KakaoForgeConfig = {
@@ -97,6 +153,14 @@ function loadAuthFile(authPath: string): AuthFile {
 export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  sendPhoto: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendVideo: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendAudio: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendFile: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendContact: (chatId: number | string, contact: ContactPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
 };
 
 type ChatRoomInfo = {
@@ -139,6 +203,118 @@ function toLong(value: any) {
 function safeNumber(value: any, fallback = 0) {
   const num = typeof value === 'number' ? value : parseInt(value, 10);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function toUnixSeconds(value?: number | Date) {
+  if (value === undefined || value === null) return undefined;
+  if (value instanceof Date) {
+    return Math.floor(value.getTime() / 1000);
+  }
+  const num = typeof value === 'number' ? value : parseInt(value, 10);
+  if (!Number.isFinite(num)) return undefined;
+  return num > 1e12 ? Math.floor(num / 1000) : Math.floor(num);
+}
+
+function buildExtra(attachment?: AttachmentInput, extra?: string) {
+  if (typeof extra === 'string' && extra.length > 0) return extra;
+  if (attachment === undefined || attachment === null) return undefined;
+  if (typeof attachment === 'string') return attachment;
+  try {
+    return JSON.stringify(attachment);
+  } catch {
+    return String(attachment);
+  }
+}
+
+function normalizeMediaAttachment(input: any) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const attachment: any = { ...input };
+  if (attachment.size !== undefined && attachment.s === undefined) attachment.s = attachment.size;
+  if (attachment.mime !== undefined && attachment.mt === undefined) attachment.mt = attachment.mime;
+  if (attachment.duration !== undefined && attachment.d === undefined) attachment.d = attachment.duration;
+  if (attachment.width !== undefined && attachment.w === undefined) attachment.w = attachment.width;
+  if (attachment.height !== undefined && attachment.h === undefined) attachment.h = attachment.height;
+  if (attachment.token !== undefined && attachment.tk === undefined) attachment.tk = attachment.token;
+  if (attachment.tokenHigh !== undefined && attachment.tkh === undefined) attachment.tkh = attachment.tokenHigh;
+  if (attachment.urlHigh !== undefined && attachment.urlh === undefined) attachment.urlh = attachment.urlHigh;
+  return attachment;
+}
+
+function normalizeFileAttachment(input: any) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const attachment: any = { ...input };
+  if (attachment.size === undefined && attachment.s !== undefined) attachment.size = attachment.s;
+  if (attachment.name === undefined && attachment.filename !== undefined) attachment.name = attachment.filename;
+  return attachment;
+}
+
+function normalizeLocationAttachment(input: any) {
+  if (!input) return input;
+  if (typeof input === 'string') return input;
+  if (typeof input === 'object' && 'lat' in input && 'lng' in input) {
+    const attachment: any = {
+      lat: Number(input.lat),
+      lng: Number(input.lng),
+    };
+    if (input.address) attachment.a = input.address;
+    if (input.title) attachment.t = input.title;
+    if (typeof input.isCurrent === 'boolean') attachment.c = input.isCurrent;
+    if (input.placeId !== undefined) attachment.cid = String(input.placeId);
+    if (input.extra && typeof input.extra === 'object') {
+      Object.assign(attachment, input.extra);
+    }
+    return attachment;
+  }
+  return input;
+}
+
+function normalizeScheduleAttachment(input: any) {
+  if (!input) return input;
+  if (typeof input === 'string') return input;
+  if (typeof input === 'object' && ('eventAt' in input || 'title' in input)) {
+    const attachment: any = {};
+    const eventAt = toUnixSeconds(input.eventAt);
+    if (eventAt !== undefined) attachment.eventAt = eventAt;
+    if (input.title) attachment.title = input.title;
+    if (input.postId !== undefined) attachment.postId = String(input.postId);
+    if (input.scheduleId !== undefined) attachment.scheduleId = String(input.scheduleId);
+    if (input.subtype !== undefined) attachment.subtype = input.subtype;
+    const alarmAt = toUnixSeconds(input.alarmAt);
+    if (alarmAt !== undefined) attachment.alarmAt = alarmAt;
+    if (input.extra && typeof input.extra === 'object') {
+      Object.assign(attachment, input.extra);
+    }
+    return attachment;
+  }
+  return input;
+}
+
+function normalizeContactAttachment(input: any) {
+  if (!input) return input;
+  if (typeof input === 'string') return { name: input };
+  if (typeof input === 'object') {
+    const attachment: any = { ...input };
+    if (attachment.extra && typeof attachment.extra === 'object') {
+      Object.assign(attachment, attachment.extra);
+      delete attachment.extra;
+    }
+    return attachment;
+  }
+  return input;
+}
+
+function normalizeLinkAttachment(input: any) {
+  if (!input) return input;
+  if (typeof input === 'string') return input;
+  if (typeof input === 'object') {
+    if (input.attachment) return input.attachment;
+    const { text, extra, ...rest } = input;
+    if (extra && typeof extra === 'object') {
+      return { ...rest, ...extra };
+    }
+    return rest;
+  }
+  return input;
 }
 
 /**
@@ -259,6 +435,14 @@ export class KakaoForgeClient extends EventEmitter {
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
+      sendPhoto: (chatId, attachment, opts) => this.sendPhoto(chatId, attachment, opts),
+      sendVideo: (chatId, attachment, opts) => this.sendVideo(chatId, attachment, opts),
+      sendAudio: (chatId, attachment, opts) => this.sendAudio(chatId, attachment, opts),
+      sendFile: (chatId, attachment, opts) => this.sendFile(chatId, attachment, opts),
+      sendContact: (chatId, contact, opts) => this.sendContact(chatId, contact, opts),
+      sendLocation: (chatId, location, opts) => this.sendLocation(chatId, location, opts),
+      sendSchedule: (chatId, schedule, opts) => this.sendSchedule(chatId, schedule, opts),
+      sendLink: (chatId, link, opts) => this.sendLink(chatId, link, opts),
     };
   }
 
@@ -1120,6 +1304,113 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return await this._carriage.write(chatId, text, msgType, writeOpts);
+  }
+
+  async _sendWithAttachment(
+    chatId: number | string,
+    type: number,
+    text: string,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {},
+    label = 'attachment'
+  ) {
+    const extra = buildExtra(attachment, opts.extra);
+    if (!extra) {
+      throw new Error(`${label} attachment is required. Upload first and pass attachment info.`);
+    }
+    const { text: _text, ...sendOpts } = opts;
+    return this.sendMessage(chatId, text || '', { ...sendOpts, type, extra });
+  }
+
+  async sendText(chatId: number | string, text: string, opts: SendOptions = {}) {
+    return this.sendMessage(chatId, text, MessageType.Text, opts);
+  }
+
+  async sendPhoto(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeMediaAttachment(attachment);
+    return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, opts, 'photo');
+  }
+
+  async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeMediaAttachment(attachment);
+    return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, opts, 'video');
+  }
+
+  async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeMediaAttachment(attachment);
+    return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, opts, 'audio');
+  }
+
+  async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeFileAttachment(attachment);
+    return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, opts, 'file');
+  }
+
+  async sendContact(chatId: number | string, contact: ContactPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeContactAttachment(contact);
+    const fallbackText = typeof contact === 'string'
+      ? contact
+      : (contact && typeof contact === 'object' ? (contact as ContactPayload).name || '' : '');
+    return this._sendWithAttachment(
+      chatId,
+      MessageType.Contact,
+      opts.text || fallbackText || '',
+      normalized,
+      opts,
+      'contact'
+    );
+  }
+
+  async sendLocation(chatId: number | string, location: LocationPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeLocationAttachment(location);
+    const fallbackText = location && typeof location === 'object'
+      ? ((location as LocationPayload).title || (location as LocationPayload).address || '')
+      : '';
+    return this._sendWithAttachment(
+      chatId,
+      MessageType.Location,
+      opts.text || fallbackText || '',
+      normalized,
+      opts,
+      'location'
+    );
+  }
+
+  async sendSchedule(chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const normalized = normalizeScheduleAttachment(schedule);
+    const fallbackText = schedule && typeof schedule === 'object'
+      ? ((schedule as SchedulePayload).title || '')
+      : '';
+    return this._sendWithAttachment(
+      chatId,
+      MessageType.Schedule,
+      opts.text || fallbackText || '',
+      normalized,
+      opts,
+      'schedule'
+    );
+  }
+
+  async sendLink(chatId: number | string, link: string | LinkPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
+    if (typeof link === 'string') {
+      const { text: _text, ...sendOpts } = opts;
+      return this.sendMessage(chatId, link, MessageType.Text, sendOpts);
+    }
+
+    const normalized = normalizeLinkAttachment(link);
+    const fallbackText = link && typeof link === 'object'
+      ? ((link as LinkPayload).text || (link as LinkPayload).url || '')
+      : '';
+    const text = opts.text || fallbackText || '';
+    const extra = buildExtra(normalized, opts.extra);
+
+    if (!extra) {
+      const { text: _text, extra: _extra, type, ...sendOpts } = opts;
+      return this.sendMessage(chatId, text, MessageType.Text, sendOpts);
+    }
+
+    const { text: _text, ...sendOpts } = opts;
+    return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Link, extra });
   }
 
   async request(method, body = {}) {
