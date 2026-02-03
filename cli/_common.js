@@ -4,6 +4,20 @@ const path = require('path');
 
 const AUTH_FILE = path.join(__dirname, '..', 'auth.json');
 
+function loadLibrary() {
+  try {
+    return require('../dist/index');
+  } catch (err) {
+    try {
+      require('ts-node/register');
+      return require('../src/index');
+    } catch (innerErr) {
+      const detail = innerErr && innerErr.message ? innerErr.message : String(innerErr);
+      throw new Error(`Failed to load KakaoForge. Run "npm run build" or install dev deps. ${detail}`);
+    }
+  }
+}
+
 function formatKstTimestamp(date = new Date()) {
   const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
   return kst.toISOString().replace('Z', '+09:00');
@@ -382,4 +396,4 @@ function loadAuth() {
   }
 }
 
-module.exports = { prompt, promptPassword, runBot, saveAuth, loadAuth, AUTH_FILE };
+module.exports = { prompt, promptPassword, runBot, saveAuth, loadAuth, AUTH_FILE, loadLibrary };

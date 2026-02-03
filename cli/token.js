@@ -6,8 +6,8 @@
  *   node cli/token.js                          # auth.json에서 로드
  *   node cli/token.js --token <token> --uuid <uuid>
  */
-const { KakaoBot } = require('../src/index');
-const { prompt, runBot, loadAuth } = require('./_common');
+const { loadLibrary, runBot, loadAuth } = require('./_common');
+const { KakaoBot } = loadLibrary();
 
 function parseArgs() {
   const args = process.argv.slice(2);

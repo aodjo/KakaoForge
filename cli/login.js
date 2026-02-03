@@ -7,8 +7,8 @@
  *   node cli/login.js --email user@example.com
  *   node cli/login.js --email user@example.com --device-uuid <uuid>
  */
-const { KakaoBot } = require('../src/index');
-const { prompt, promptPassword, runBot } = require('./_common');
+const { loadLibrary, prompt, promptPassword, runBot } = require('./_common');
+const { KakaoBot } = loadLibrary();
 
 function parseArgs() {
   const args = process.argv.slice(2);

@@ -6,9 +6,9 @@
  *   node cli/qr.js
  *   node cli/qr.js --device-uuid <uuid>
  */
-const { KakaoBot } = require('../src/index');
+const { loadLibrary, runBot, saveAuth } = require('./_common');
+const { KakaoBot } = loadLibrary();
 const qrcode = require('qrcode-terminal');
-const { runBot, saveAuth } = require('./_common');
 
 function parseArgs() {
   const args = process.argv.slice(2);
