@@ -1695,11 +1695,6 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _prepareMediaAttachment(type: UploadMediaType, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
     if (typeof attachment === 'string') {
-      const trimmed = attachment.trim();
-      const looksJson = trimmed.startsWith('{') || trimmed.startsWith('[');
-      if (looksJson) {
-        return attachment;
-      }
       try {
         const stat = fs.statSync(attachment);
         if (stat.isFile()) {
@@ -1708,9 +1703,7 @@ export class KakaoForgeClient extends EventEmitter {
       } catch {
         // fall through
       }
-      if (trimmed.length > 0) {
-        throw new Error(`file not found: ${attachment}`);
-      }
+      throw new Error(`file not found: ${attachment}`);
     }
     return attachment;
   }
