@@ -231,6 +231,73 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Fetch chat list via LOCO (LCHATLIST).
+   */
+  async lchatList({
+    chatIds = [],
+    maxIds = [],
+    lastTokenId = 0,
+    lastChatId = 0,
+  }: any = {}) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatIds: (chatIds || []).map(toLong),
+      maxIds: (maxIds || []).map(toLong),
+      lastTokenId: toLong(lastTokenId || 0),
+      lastChatId: toLong(lastChatId || 0),
+    };
+
+    return await this.request('LCHATLIST', body);
+  }
+
+  /**
+   * Sync messages via LOCO (SYNCMSG).
+   * @param {Object} opts
+   * @param {number|string} opts.chatId
+   * @param {number} [opts.cur=0]
+   * @param {number} [opts.max=0]
+   * @param {number} [opts.cnt=50]
+   */
+  async syncMsg({ chatId, cur = 0, max = 0, cnt = 50 }: any) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatId: toLong(chatId),
+      cur: toLong(cur),
+      max: toLong(max),
+      cnt: typeof cnt === 'number' ? cnt : parseInt(cnt, 10) || 50,
+    };
+
+    return await this.request('SYNCMSG', body);
+  }
+
+  /**
+   * Fetch specific messages via LOCO (GETMSGS).
+   * @param {number[]|string[]} chatIds
+   * @param {number[]|string[]} logIds
+   */
+  async getMsgs(chatIds: Array<number | string>, logIds: Array<number | string>) {
+    const toLong = (v) => {
+      if (Long.isLong(v)) return v;
+      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
+    };
+
+    const body = {
+      chatIds: (chatIds || []).map(toLong),
+      logIds: (logIds || []).map(toLong),
+    };
+
+    return await this.request('GETMSGS', body);
+  }
+
+  /**
    * Send PING to keep connection alive.
    */
   async ping() {

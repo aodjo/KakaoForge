@@ -1,14 +1,14 @@
-import { EventEmitter } from 'events';
+﻿import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
-import { BreweryClient } from './net/brewery-client';
 import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 
-export type TransportMode = 'brewery' | 'loco' | null;
+export type TransportMode = 'loco' | null;
 
 export type MessageEvent = {
   msg: {
@@ -34,23 +34,6 @@ export type MessageEvent = {
   logId: number;
 };
 
-export type BreweryEvent = {
-  path: string;
-  type: string;
-  payload: any;
-  raw: any;
-};
-
-export type SyncOptions = {
-  since?: number;
-  count?: number;
-};
-
-export type WatchAllOptions = {
-  includeHistory?: boolean;
-  forceUpdate?: boolean;
-};
-
 export type SendOptions = {
   msgId?: number;
   noSeen?: boolean;
@@ -63,10 +46,6 @@ export type SendOptions = {
   silence?: boolean;
   isSilence?: boolean;
   type?: number;
-};
-
-export type AutoWatchOptions = {
-  intervalMs?: number;
 };
 
 export type KakaoForgeConfig = {
@@ -84,8 +63,6 @@ export type KakaoForgeConfig = {
   networkType?: number;
   refreshToken?: string;
   debug?: boolean;
-  syncInterval?: number;
-  autoWatchInterval?: number;
 };
 
 type AuthFile = {
@@ -112,17 +89,25 @@ function loadAuthFile(authPath: string): AuthFile {
 export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
-  watch: (chatId: number | string, lastLogId?: number) => void;
-  unwatch: (chatId: number | string) => void;
-  watchAll: (opts?: WatchAllOptions) => Promise<number>;
-  unwatchAll: () => void;
-  startSync: (intervalMs?: number) => void;
-  stopSync: () => void;
-  startAutoWatch: (opts?: AutoWatchOptions) => void;
-  stopAutoWatch: () => void;
-  list: () => Promise<any>;
-  sync: (chatId: number | string, opts?: SyncOptions) => Promise<any>;
 };
+
+type ChatRoomInfo = {
+  chatId?: number;
+  type?: string;
+  title?: string;
+  roomName?: string;
+  displayMembers?: any[];
+  lastChatLogId?: number;
+  lastSeenLogId?: number;
+  lastLogId?: number;
+};
+
+type ChatListCursor = {
+  lastTokenId: number;
+  lastChatId: number;
+};
+
+type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
 
 function uniqueStrings(list) {
   if (!Array.isArray(list)) return [];
@@ -135,30 +120,24 @@ function uniqueNumbers(list) {
   return [...new Set(nums)];
 }
 
-function resolveRoomName(chat: any): string {
-  if (!chat) return '';
-  const title = String(chat.title || '').trim();
-  if (title) return title;
-  const members = Array.isArray(chat.displayMembers)
-    ? chat.displayMembers
-        .map((m: any) => m.nickname || m.nickName || m.name || '')
-        .filter((v: string) => String(v).trim() !== '')
-    : [];
-  if (members.length > 0) return members.join(', ');
-  return '';
+function toLong(value: any) {
+  if (Long.isLong(value)) return value;
+  const num = typeof value === 'number' ? value : parseInt(value, 10);
+  return Long.fromNumber(Number.isFinite(num) ? num : 0);
+}
+
+function safeNumber(value: any, fallback = 0) {
+  const num = typeof value === 'number' ? value : parseInt(value, 10);
+  return Number.isFinite(num) ? num : fallback;
 }
 
 /**
- * KakaoForge Bot - KakaoTalk bot framework.
- *
- * Supports two transport modes:
- *   - Brewery (HTTP/2): v26.1.2+ event stream via talk-pilsner.kakao.com
- *   - LOCO (TCP): Legacy binary protocol via booking-loco.kakao.com
+ * KakaoForge Bot - KakaoTalk bot framework (LOCO only).
  *
  * Events emitted:
- *   - 'message'     : Chat message received { chatId, sender, text, type, logId, raw }
- *   - 'event'       : Any Brewery event { path, type, payload, raw }
- *   - 'connected'   : Bot connected to server
+ *   - 'message'     : Chat message received (chat, msg)
+ *   - 'ready'       : LOCO login + push ready (chat)
+ *   - 'connected'   : LOCO socket connected
  *   - 'disconnected': Bot disconnected
  *   - 'error'       : Error occurred
  */
@@ -178,19 +157,11 @@ export class KakaoForgeClient extends EventEmitter {
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
-  _brewery: BreweryClient | null;
-
-  _messageHandler: ((msg: MessageEvent, chat: ChatModule) => void) | null;
+  _messageHandler: MessageHandler | null;
   _pushHandlers: Map<string, (payload: any) => void>;
-  _breweryEventHandlers: Map<string, (event: BreweryEvent) => void>;
-  _chatRooms: Map<string, any>;
-
-  _syncTimer: NodeJS.Timeout | null;
-  _syncInterval: number;
-  _syncChatIds: Set<string>;
-  _autoWatchTimer: NodeJS.Timeout | null;
-  _autoWatchInterval: number;
   _locoAutoConnectAttempted: boolean;
+  _chatRooms: Map<string, ChatRoomInfo>;
+  _chatListCursor: ChatListCursor;
 
   constructor(config: KakaoForgeConfig = {}) {
     super();
@@ -214,39 +185,19 @@ export class KakaoForgeClient extends EventEmitter {
     // Debug mode: log all raw events
     this.debug = config.debug || false;
 
-    // Legacy LOCO clients
+    // LOCO clients
     this._booking = null;
     this._carriage = null;
 
-    // Brewery HTTP/2 client (v26.1.2+)
-    this._brewery = null;
-
     this._messageHandler = null;
     this._pushHandlers = new Map();
-    this._breweryEventHandlers = new Map();
-    this._chatRooms = new Map(); // chatId → { lastLogId, ... }
-
-    // Message sync polling
-    this._syncTimer = null;
-    this._syncInterval = config.syncInterval || 3000; // 3s default
-    this._syncChatIds = new Set(); // chatIds to poll
-    this._autoWatchTimer = null;
-    this._autoWatchInterval = config.autoWatchInterval || 60000; // 60s default
     this._locoAutoConnectAttempted = false;
+    this._chatRooms = new Map();
+    this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
-      watch: (chatId, lastLogId) => this.watchChat(chatId, lastLogId),
-      unwatch: (chatId) => this.unwatchChat(chatId),
-      watchAll: (opts) => this.watchAllChats(opts),
-      unwatchAll: () => this.unwatchAllChats(),
-      startSync: (intervalMs) => this.startSync(intervalMs),
-      stopSync: () => this.stopSync(),
-      startAutoWatch: (opts) => this.startAutoWatchAll(opts),
-      stopAutoWatch: () => this.stopAutoWatchAll(),
-      list: () => this.getChatRooms(),
-      sync: (chatId, opts) => this.syncMessages(chatId, opts),
     };
   }
 
@@ -258,17 +209,8 @@ export class KakaoForgeClient extends EventEmitter {
   /**
    * Login with email/password (sub-device mode).
    * This authenticates via HTTP, then connects to LOCO servers.
-   *
-   * @param {Object} opts
-   * @param {string} opts.email - Kakao account email
-   * @param {string} opts.password - Kakao account password
-   * @param {string} [opts.deviceName] - Device name shown in settings
-   * @param {string} [opts.modelName] - Device model name
-   * @param {boolean} [opts.forced] - Force login (kick other sub-devices)
-   * @param {boolean} [opts.checkAllowlist] - Check allowlist.json before login (sub-device)
-   * @param {boolean} [opts.enforceAllowlist] - Throw if not allowlisted (sub-device)
    */
-  async login({ email, password, deviceName, modelName, forced = false, checkAllowlist, enforceAllowlist, useBrewery = false }: any) {
+  async login({ email, password, deviceName, modelName, forced = false, checkAllowlist, enforceAllowlist }: any) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
@@ -294,26 +236,12 @@ export class KakaoForgeClient extends EventEmitter {
 
     console.log(`[+] Authenticated: userId=${this.userId}`);
 
-    // Step 2: Connect to servers
-    if (useBrewery) {
-      return await this.connectBrewery();
-    }
+    // Step 2: Connect to servers (LOCO only)
     return await this.connect();
   }
 
   /**
    * Login with QR code (sub-device mode).
-   * Generates a QR code URL, waits for the user to scan it on their phone,
-   * then connects to LOCO servers.
-   *
-   * @param {Object} [opts]
-   * @param {string} [opts.deviceName] - Device name shown in settings
-   * @param {string} [opts.modelName] - Device model name
-   * @param {boolean} [opts.forced] - Force login (kick other sub-devices)
-   * @param {boolean} [opts.checkAllowlist] - Check allowlist.json before QR login
-   * @param {boolean} [opts.enforceAllowlist] - Throw if not allowlisted
-   * @param {function} [opts.onQrUrl] - Callback when QR URL is ready: (url) => {}
-   * @param {function} [opts.onPasscode] - Callback when passcode is shown: (passcode) => {}
    */
   async loginQR({
     deviceName,
@@ -323,7 +251,6 @@ export class KakaoForgeClient extends EventEmitter {
     enforceAllowlist,
     onQrUrl,
     onPasscode,
-    useBrewery = false,
   }: any = {}) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
@@ -350,22 +277,20 @@ export class KakaoForgeClient extends EventEmitter {
 
     console.log(`[+] QR authenticated: userId=${this.userId}`);
 
-    // Step 2: Connect to servers
-    if (useBrewery) {
-      return await this.connectBrewery();
-    }
+    // Step 2: Connect to servers (LOCO only)
     return await this.connect();
   }
 
   /**
    * Connect to KakaoTalk LOCO servers.
-   * Requires userId and oauthToken to be set (either manually or via login()).
-   *
-   * Flow: Booking CHECKIN → Carriage V2SL → LOGINLIST
+   * Requires userId, oauthToken, deviceUuid.
    */
   async connect() {
     if (!this.oauthToken) {
       throw new Error('No OAuth token. Call login() first or set oauthToken in constructor.');
+    }
+    if (!this.deviceUuid) {
+      throw new Error('No deviceUuid. Use auth.json or call login() first.');
     }
 
     // Step 1: Booking - GETCONF
@@ -451,9 +376,13 @@ export class KakaoForgeClient extends EventEmitter {
 
     this._carriage.on('push', (packet) => this._onPush(packet));
     this._carriage.on('error', (err) => console.error('[!] Carriage error:', err.message));
-    this._carriage.on('disconnected', () => console.log('[!] Disconnected from Carriage'));
+    this._carriage.on('disconnected', () => {
+      console.log('[!] Disconnected from Carriage');
+      this.emit('disconnected');
+    });
 
     await this._carriage.connect(checkinResult.host, checkinResult.port);
+    this.emit('connected');
     console.log('[+] Connected to Carriage server (V2SL handshake done)');
 
     const loginRes = await this._carriage.loginList({
@@ -462,6 +391,7 @@ export class KakaoForgeClient extends EventEmitter {
       lang: this.lang,
       duuid: this.deviceUuid,
       oauthToken: this.oauthToken,
+      ntype: this.ntype,
     });
 
     console.log(`[+] LOGINLIST response: status=${loginRes.status}`);
@@ -470,9 +400,12 @@ export class KakaoForgeClient extends EventEmitter {
       console.error('[!] Body:', JSON.stringify(loginRes.body, null, 2));
     }
 
+    this._applyChatList(loginRes.body);
+
     // Start keepalive
     this._carriage.startPing(60000);
     console.log('[+] Bot is ready!');
+    this.emit('ready', this.chat);
 
     return loginRes;
   }
@@ -505,146 +438,46 @@ export class KakaoForgeClient extends EventEmitter {
     throw new Error('Ticket CHECKIN failed: no endpoints attempted');
   }
 
-  /**
-   * Connect to KakaoTalk via Brewery HTTP/2 protocol (v26.1.2+).
-   * This replaces the legacy Booking/Carriage LOCO flow for receiving events.
-   *
-   * Connects to talk-pilsner.kakao.com, starts the /listen event stream,
-   * and begins periodic /ping keepalive.
-   *
-   * Note: Message sending via Brewery is not yet supported.
-   * The WRITE command still uses LOCO TCP binary protocol internally.
-   */
-  async connectBrewery() {
-    if (!this.oauthToken) {
-      throw new Error('No OAuth token. Call login() first or set oauthToken in constructor.');
+  _onPush(packet) {
+    // Emit to specific push handlers
+    const handler = this._pushHandlers.get(packet.method);
+    if (handler) {
+      handler(packet);
     }
 
-    console.log('[*] Connecting to Brewery (HTTP/2)...');
-    this._brewery = new BreweryClient({
-      oauthToken: this.oauthToken,
-      deviceUuid: this.deviceUuid,
-      lang: this.lang,
-      appVer: this.appVer,
-    });
-
-    await this._brewery.connect();
-
-    // Map brewery events to handlers
-    this._brewery.on('event', (parsed) => this._onBreweryEvent(parsed));
-
-    this._brewery.on('listenEnd', () => {
-      console.log('[*] Listen stream ended, reconnecting in 1s...');
-      setTimeout(() => {
-        if (this._brewery) this._brewery.startListen();
-      }, 1000);
-    });
-
-    this._brewery.on('listenError', (err) => {
-      console.error('[!] Listen error:', err.message);
-      if (err.message && err.message.includes('401')) {
-        console.error('[!] 인증 실패 (401). 토큰이 만료되었거나 형식이 잘못됨.');
-        return;
+    if (packet.method === 'MSG') {
+      const { chatId, chatLog } = packet.body || {};
+      if (chatLog) {
+        this._emitMessage({ chatId, chatLog });
       }
-      console.log('[*] Reconnecting listen in 5s...');
-      setTimeout(() => {
-        if (this._brewery) this._brewery.startListen();
-      }, 5000);
-    });
-
-    // Start listening for events and keepalive ping
-    this._brewery.startListen();
-    this._brewery.startPing();
-
-    console.log('[+] Brewery connected and listening!');
-  }
-
-  /**
-   * Handle Brewery server-sent events.
-   * Routes events to registered handlers, detects chat messages,
-   * and emits appropriate events.
-   */
-  _onBreweryEvent(parsed: BreweryEvent) {
-    // Debug: log all raw events
-    if (this.debug) {
-      const payloadPreview = parsed.payload
-        ? JSON.stringify(parsed.payload).substring(0, 300)
-        : '(empty)';
-      console.log(`[DBG] event path="${parsed.path}" type="${parsed.type}" payload=${payloadPreview}`);
-    }
-
-    // Emit generic 'event' for all Brewery events
-    this.emit('event', parsed);
-
-    // Check for specific brewery event path handlers
-    const brewHandler = this._breweryEventHandlers.get(parsed.path);
-    if (brewHandler) {
-      brewHandler(parsed);
-    }
-
-    // Check push handlers (path acts like LOCO method name)
-    const pushHandler = this._pushHandlers.get(parsed.path);
-    if (pushHandler) {
-      pushHandler(parsed);
-    }
-
-    // gateway/Hello is the initial handshake event
-    if (parsed.path === 'gateway/Hello') {
-      console.log('[+] Brewery gateway/Hello received');
-      this.emit('ready', this.chat, parsed);
-      return;
-    }
-
-    // Try to detect and route chat message events
-    this._tryRouteMessage(parsed);
-
-    // Log unhandled events (if no specific handler and not debug mode)
-    if (!brewHandler && !pushHandler && !this.debug) {
-      const payloadStr = parsed.payload ? JSON.stringify(parsed.payload).substring(0, 200) : '';
-      console.log(`[<] ${parsed.path} (${parsed.type}) ${payloadStr}`);
-    }
-  }
-
-  /**
-   * Try to extract chat message from Brewery event.
-   * Handles known event paths that carry chat messages.
-   */
-  _tryRouteMessage(parsed) {
-    if (!parsed.payload) return;
-
-    const p = parsed.payload;
-
-    // Known chat message patterns from Brewery events
-    // The exact path is discovered empirically - these are candidates:
-    if (parsed.path === 'chat/Message' || parsed.path === 'MSG') {
-      this._emitMessage(p);
-      return;
-    }
-
-    // Generic detection: look for chatLog-like structures in payload
-    if (p.chatId && (p.chatLog || p.msgId || p.logId)) {
-      this._emitMessage(p);
-      return;
-    }
-
-    // Array of chatLogs (SYNCMSG-like)
-    if (p.chatId && Array.isArray(p.chatLogs) && p.chatLogs.length > 0) {
-      for (const log of p.chatLogs) {
-        this._emitMessage({ chatId: p.chatId, chatLog: log });
+    } else if (packet.method === 'CHATINFO' || packet.method === 'UPDATECHAT') {
+      const info = packet.body?.chatInfo || packet.body?.chat || packet.body?.chatData || packet.body?.chatRoom;
+      if (info) {
+        this._updateChatRooms([info]);
       }
+    } else if (packet.method === 'KICKOUT') {
+      console.error('[!] KICKOUT received:', JSON.stringify(packet.body));
+      this.emit('kickout', packet.body);
+    } else if (this.debug) {
+      console.log(`[DBG] Push: ${packet.method}`, JSON.stringify(packet.body).substring(0, 200));
     }
   }
 
-  /**
-   * Emit a normalized message event.
-   */
+  onMessage(handler: MessageHandler) {
+    this._messageHandler = handler;
+  }
+
+  onPush(method: string, handler: (payload: any) => void) {
+    this._pushHandlers.set(method, handler);
+  }
+
   _emitMessage(data: any) {
     const chatLog = data.chatLog || data;
-    const roomId = data.chatId || chatLog.chatId || 0;
-    const senderId = chatLog.authorId || chatLog.senderId || chatLog.userId || 0;
+    const roomId = safeNumber(data.chatId || chatLog.chatId || 0, 0);
+    const senderId = safeNumber(chatLog.authorId || chatLog.senderId || chatLog.userId || 0, 0);
     const text = chatLog.message || chatLog.msg || chatLog.text || '';
-    const type = chatLog.type || chatLog.msgType || 1;
-    const logId = chatLog.logId || chatLog.msgId || 0;
+    const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
+    const logId = safeNumber(chatLog.logId || chatLog.msgId || 0, 0);
     const senderName =
       chatLog.authorName ||
       chatLog.authorNickname ||
@@ -668,331 +501,222 @@ export class KakaoForgeClient extends EventEmitter {
       logId,
     };
 
-    if (this._messageHandler) {
-      this._messageHandler(msg, this.chat);
-    }
-    this.emit('message', msg, this.chat);
-  }
-
-  /**
-   * Register a handler for a specific Brewery event path.
-   * Event paths: 'talk/ProfileUpdated', 'chat/SettingsUpdated', etc.
-   * handler(event) where event = { path, type, payload, raw }
-   */
-  onBreweryEvent(path: string, handler: (event: BreweryEvent) => void) {
-    this._breweryEventHandlers.set(path, handler);
-  }
-
-  /**
-   * Send a generic Brewery HTTP/2 request.
-   * @param {string} method - HTTP method (GET, POST)
-   * @param {string} path - URL path
-   * @param {Object} [opts] - { headers, body, timeout }
-   * @returns {Promise<{status: number, headers: Object, body: Buffer}>}
-   */
-  async breweryRequest(method, path, opts = {}) {
-    if (!this._brewery) throw new Error('Brewery not connected. Call connectBrewery() first.');
-    return await this._brewery.request(method, path, opts);
-  }
-
-  /**
-   * Handle server push messages (LOCO mode).
-   */
-  _onPush(packet) {
-    // Emit to specific push handlers
-    const handler = this._pushHandlers.get(packet.method);
-    if (handler) {
-      handler(packet);
-    }
-
-    if (packet.method === 'MSG') {
-      const { chatId, chatLog } = packet.body;
-      if (chatLog) {
-        this._emitMessage({ chatId, chatLog });
+    if (roomId) {
+      const key = String(roomId);
+      const prev = this._chatRooms.get(key) || {};
+      const prevLast = safeNumber(prev.lastLogId || 0, 0);
+      if (logId > prevLast) {
+        this._chatRooms.set(key, { ...prev, lastLogId: logId });
       }
-    } else if (packet.method === 'KICKOUT') {
-      console.error('[!] KICKOUT received:', JSON.stringify(packet.body));
-      this.emit('kickout', packet.body);
-    } else if (this.debug) {
-      console.log(`[DBG] Push: ${packet.method}`, JSON.stringify(packet.body).substring(0, 200));
+    }
+
+    if (this._messageHandler) {
+      if (this._messageHandler.length <= 1) {
+        (this._messageHandler as (msg: MessageEvent) => void)(msg);
+      } else {
+        (this._messageHandler as (chat: ChatModule, msg: MessageEvent) => void)(this.chat, msg);
+      }
+    }
+    this.emit('message', this.chat, msg);
+  }
+
+  _applyChatList(body: any) {
+    if (!body) return [];
+
+    const chats = this._extractChatList(body);
+    this._updateChatRooms(chats);
+
+    const delChatIds = Array.isArray(body.delChatIds) ? body.delChatIds : [];
+    for (const id of delChatIds) {
+      this._chatRooms.delete(String(id));
+    }
+
+    if (body.lastTokenId !== undefined) {
+      this._chatListCursor.lastTokenId = safeNumber(body.lastTokenId, this._chatListCursor.lastTokenId || 0);
+    }
+    if (body.lastChatId !== undefined) {
+      this._chatListCursor.lastChatId = safeNumber(body.lastChatId, this._chatListCursor.lastChatId || 0);
+    }
+
+    return chats;
+  }
+
+  _extractChatList(body: any): any[] {
+    if (!body) return [];
+    if (Array.isArray(body.chatDatas)) return body.chatDatas;
+    if (Array.isArray(body.chatInfos)) return body.chatInfos;
+    if (Array.isArray(body.chats)) return body.chats;
+    if (Array.isArray(body.chatRooms)) return body.chatRooms;
+    if (Array.isArray(body.chatList)) return body.chatList;
+    return [];
+  }
+
+  _extractDisplayMembers(chat: any): string[] {
+    if (!chat) return [];
+    const names: string[] = [];
+
+    if (Array.isArray(chat.displayMembers)) {
+      for (const member of chat.displayMembers) {
+        const name = member?.nickname || member?.nickName || member?.name || '';
+        if (name) names.push(name);
+      }
+    }
+
+    if (names.length === 0 && Array.isArray(chat.displayNickNames)) {
+      for (const name of chat.displayNickNames) {
+        if (name) names.push(String(name));
+      }
+    }
+
+    if (names.length === 0 && Array.isArray(chat.displayNicknames)) {
+      for (const name of chat.displayNicknames) {
+        if (name) names.push(String(name));
+      }
+    }
+
+    return names.filter(Boolean);
+  }
+
+  _extractTitleFromMeta(meta: any): string {
+    if (!meta) return '';
+
+    if (typeof meta === 'string') {
+      const trimmed = meta.trim();
+      if (!trimmed) return '';
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parsed?.title || parsed?.name || parsed?.subject || '';
+      } catch {
+        return trimmed.length <= 100 ? trimmed : '';
+      }
+    }
+
+    if (typeof meta === 'object') {
+      return meta.title || meta.name || meta.subject || '';
+    }
+
+    return '';
+  }
+
+  _extractTitle(chat: any): string {
+    if (!chat) return '';
+
+    const direct = chat.title || chat.roomName || chat.name || chat.subject;
+    if (direct) return String(direct);
+
+    const metaTitle = this._extractTitleFromMeta(chat.meta);
+    if (metaTitle) return metaTitle;
+
+    if (Array.isArray(chat.chatMetas)) {
+      for (const meta of chat.chatMetas) {
+        const title = this._extractTitleFromMeta(meta?.content);
+        if (title) return title;
+      }
+    }
+
+    return '';
+  }
+
+  _updateChatRooms(chats: any[]) {
+    if (!Array.isArray(chats)) return;
+
+    for (const chat of chats) {
+      const chatId = safeNumber(chat?.chatId || chat?.id || chat?.roomId || chat?.chatRoomId, 0);
+      if (!chatId) continue;
+
+      const key = String(chatId);
+      const prev = this._chatRooms.get(key) || {};
+      const displayMembers = this._extractDisplayMembers(chat);
+      const title = this._extractTitle(chat);
+      const roomName =
+        title ||
+        (displayMembers.length > 0 ? displayMembers.join(', ') : '') ||
+        prev.roomName ||
+        '';
+
+      const lastChatLogId = safeNumber(
+        chat.lastChatLogId || chat.lastMessageId || chat.lastLogId || chat.lastSeenLogId,
+        prev.lastChatLogId || 0
+      );
+
+      const lastSeenLogId = safeNumber(chat.lastSeenLogId, prev.lastSeenLogId || 0);
+
+      const next: ChatRoomInfo = {
+        ...prev,
+        chatId,
+        type: chat.type || prev.type,
+        title: title || prev.title || '',
+        roomName,
+        displayMembers: displayMembers.length > 0 ? displayMembers : prev.displayMembers,
+        lastChatLogId,
+        lastSeenLogId,
+      };
+
+      this._chatRooms.set(key, next);
     }
   }
 
   /**
-   * Register a message handler.
-   * handler(msg) where msg = { chatId, sender, text, type, logId, raw }
+   * Fetch chat room list via LOCO (LCHATLIST).
+   * Returns { chats: [...] }
    */
-  onMessage(handler: (msg: MessageEvent, chat: ChatModule) => void) {
-    this._messageHandler = handler;
+  async getChatRooms() {
+    if (!this._carriage) throw new Error('LOCO not connected');
+
+    const chatIds: Long[] = [];
+    const maxIds: Long[] = [];
+    for (const [key, room] of this._chatRooms.entries()) {
+      const chatId = safeNumber(key, 0);
+      if (!chatId) continue;
+      chatIds.push(toLong(chatId));
+      maxIds.push(toLong(room.lastChatLogId || 0));
+    }
+
+    const res = await this._carriage.lchatList({
+      chatIds,
+      maxIds,
+      lastTokenId: this._chatListCursor.lastTokenId || 0,
+      lastChatId: this._chatListCursor.lastChatId || 0,
+    });
+
+    const chats = this._applyChatList(res.body);
+    return { ...res.body, chats };
   }
 
   /**
-   * Register a push handler for a specific LOCO method or Brewery event path.
+   * Sync messages via LOCO (SYNCMSG).
    */
-  onPush(method: string, handler: (payload: any) => void) {
-    this._pushHandlers.set(method, handler);
-  }
-
-  // ─── Message Sync (Sub-device REST polling) ──────────────────────
-
-  /**
-   * Fetch messages from a chat room via Brewery REST API.
-   * Sub-devices use this instead of LOCO push for message reception.
-   *
-   * @param {number|string} chatId - Chat room ID
-   * @param {Object} [opts]
-   * @param {number} [opts.since=0] - Fetch messages after this logId
-   * @param {number} [opts.count=50] - Number of messages to fetch
-   * @returns {Promise<Array>} Array of LogMeta objects
-   */
-  async syncMessages(chatId: number | string, { since = 0, count = 50 }: SyncOptions = {}) {
-    if (!this._brewery) throw new Error('Brewery not connected');
+  async syncMessages(chatId: number | string, { since = 0, count = 50, max = 0 }: any = {}) {
+    if (!this._carriage) throw new Error('LOCO not connected');
 
     const room = this._chatRooms.get(String(chatId)) || {};
     const cur = since || room.lastLogId || 0;
 
-    const result = await this._brewery.syncMessages(chatId, { cur, cnt: count });
+    const res = await this._carriage.syncMsg({
+      chatId,
+      cur,
+      max,
+      cnt: count,
+    });
 
-    // Process and emit new messages
-    if (result.content && result.content.length > 0) {
+    const logs = res?.body?.chatLogs || [];
+    if (Array.isArray(logs)) {
       let maxLogId = cur;
-      for (const meta of result.content) {
-        if (meta.logId > cur) {
-          this._emitMessage({
-            chatId: meta.chatId || Number(chatId),
-            chatLog: {
-              logId: meta.logId,
-              chatId: meta.chatId || Number(chatId),
-              type: meta.type || 1,
-              message: meta.content || '',
-              extra: meta.extra,
-              linkId: meta.linkId,
-              revision: meta.revision,
-            },
-          });
+      for (const log of logs) {
+        const logId = safeNumber(log?.logId || log?.msgId || 0, 0);
+        if (logId > cur) {
+          this._emitMessage({ chatId: Number(chatId), chatLog: log });
         }
-        if (meta.logId > maxLogId) maxLogId = meta.logId;
+        if (logId > maxLogId) maxLogId = logId;
       }
-
-      // Update cursor
       this._chatRooms.set(String(chatId), { ...room, lastLogId: maxLogId });
     }
 
-    return result;
+    return res?.body || res;
   }
 
   /**
-   * Fetch message metadata for a specific range.
-   *
-   * @param {number|string} chatId
-   * @param {number} from - Start logId
-   * @param {number} to - End logId
-   * @param {boolean} [desc=false]
-   * @returns {Promise<Object>} { content: [LogMeta], size, last }
-   */
-  async getMessages(chatId: number | string, from: number, to: number, desc = false) {
-    if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getMessages(chatId, from, to, desc);
-  }
-
-  /**
-   * Add a chat room to the polling list.
-   * Messages will be fetched periodically via syncMessages().
-   *
-   * @param {number|string} chatId
-   * @param {number} [lastLogId=0] - Start polling from this logId
-   */
-  watchChat(chatId: number | string, lastLogId = 0) {
-    const key = String(chatId);
-    this._syncChatIds.add(key);
-    if (lastLogId) {
-      this._chatRooms.set(key, { ...this._chatRooms.get(key), lastLogId });
-    }
-    console.log(`[+] Watching chat ${chatId} (from logId=${lastLogId})`);
-  }
-
-  /**
-   * Remove a chat room from the polling list.
-   */
-  unwatchChat(chatId: number | string) {
-    this._syncChatIds.delete(String(chatId));
-  }
-
-  /**
-   * Start periodic message polling for watched chats.
-   * @param {number} [intervalMs] - Poll interval (default: syncInterval from config)
-   */
-  startSync(intervalMs?: number) {
-    this.stopSync();
-    const interval = intervalMs || this._syncInterval;
-
-    this._syncTimer = setInterval(async () => {
-      for (const chatId of this._syncChatIds) {
-        try {
-          await this.syncMessages(chatId);
-        } catch (err) {
-          if (this.debug) {
-            console.error(`[DBG] Sync error for chat ${chatId}:`, err.message);
-          }
-        }
-      }
-    }, interval);
-
-    console.log(`[+] Message sync started (interval=${interval}ms, chats=${this._syncChatIds.size})`);
-  }
-
-  /**
-   * Stop periodic message polling.
-   */
-  stopSync() {
-    if (this._syncTimer) {
-      clearInterval(this._syncTimer);
-      this._syncTimer = null;
-    }
-  }
-
-  /**
-   * Watch all chat rooms from the chat list.
-   * By default, starts from each chat's lastMessageId to avoid backfill.
-   *
-   * @param {Object} [opts]
-   * @param {boolean} [opts.includeHistory=false] - Start from logId=0 for all
-   * @param {boolean} [opts.forceUpdate=false] - Override existing watch cursors
-   * @returns {Promise<number>} number of chats added/updated
-   */
-  async watchAllChats({ includeHistory = false, forceUpdate = false }: WatchAllOptions = {}) {
-    if (!this._brewery) throw new Error('Brewery not connected');
-    const result = await this.getChatRooms();
-    const chats = result.chats || [];
-    let count = 0;
-
-    for (const chat of chats) {
-      const chatId = chat.chatId;
-      if (!chatId) continue;
-      const key = String(chatId);
-      const already = this._syncChatIds.has(key);
-      if (already && !forceUpdate) continue;
-
-      let lastLogId = 0;
-      if (!includeHistory) {
-        lastLogId = chat.lastMessageId || chat.lastSeenLogId || 0;
-      }
-
-      const roomName = resolveRoomName(chat);
-      const prev = this._chatRooms.get(key) || {};
-      this._chatRooms.set(key, {
-        ...prev,
-        lastLogId,
-        title: chat.title || prev.title || '',
-        roomName: roomName || prev.roomName || '',
-        displayMembers: chat.displayMembers || prev.displayMembers,
-      });
-
-      this.watchChat(chatId, lastLogId);
-      count += 1;
-    }
-
-    return count;
-  }
-
-  /**
-   * Clear all watched chats.
-   */
-  unwatchAllChats() {
-    this._syncChatIds.clear();
-    this._chatRooms.clear();
-  }
-
-  /**
-   * Periodically refresh the chat list and watch all chats.
-   * Useful for auto-detecting new incoming messages across all rooms.
-   *
-   * @param {Object} [opts]
-   * @param {number} [opts.intervalMs] - refresh interval
-   */
-  startAutoWatchAll({ intervalMs }: AutoWatchOptions = {}) {
-    this.stopAutoWatchAll();
-    const interval = intervalMs || this._autoWatchInterval;
-
-    const tick = async () => {
-      try {
-        await this.watchAllChats({ includeHistory: false, forceUpdate: false });
-        if (!this._syncTimer) this.startSync();
-      } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] auto watch error:', err.message);
-        }
-      }
-    };
-
-    tick();
-    this._autoWatchTimer = setInterval(tick, interval);
-    console.log(`[+] Auto watch started (interval=${interval}ms)`);
-  }
-
-  stopAutoWatchAll() {
-    if (this._autoWatchTimer) {
-      clearInterval(this._autoWatchTimer);
-      this._autoWatchTimer = null;
-    }
-  }
-
-  /**
-   * Fetch chat tab settings to discover chat rooms with updates.
-   * @param {number} [revision=0]
-   * @returns {Promise<Object>}
-   */
-  async getChatTabSettings(revision = 0) {
-    if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getChatTabSettings(revision);
-  }
-
-  /**
-   * Fetch chat room list via GET /messaging/chats.
-   * Returns { chats: [{ chatId, type, title, unreadCount, lastMessageId, displayMembers, ... }] }
-   *
-   * @returns {Promise<Object>}
-   */
-  async getChatRooms() {
-    if (!this._brewery) throw new Error('Brewery not connected');
-    const result = await this._brewery.getChatRooms();
-    const chats = result.chats || [];
-    for (const chat of chats) {
-      if (!chat || !chat.chatId) continue;
-      const key = String(chat.chatId);
-      const prev = this._chatRooms.get(key) || {};
-      const roomName = resolveRoomName(chat);
-      this._chatRooms.set(key, {
-        ...prev,
-        title: chat.title || prev.title || '',
-        roomName: roomName || prev.roomName || '',
-        displayMembers: chat.displayMembers || prev.displayMembers,
-        lastMessageId: chat.lastMessageId || prev.lastMessageId,
-        lastSeenLogId: chat.lastSeenLogId || prev.lastSeenLogId,
-      });
-    }
-    return result;
-  }
-
-  // ─── Message Sending ────────────────────────────────────────────
-
-  /**
-   * Send a text message to a chatroom.
-   * Tries Brewery first, falls back to LOCO if available.
-   *
-   * @param {number|string} chatId - Chat room ID
-   * @param {string} text - Message text
-   * @param {number} [type=1] - Message type (1=text)
-   * @param {Object} [opts]
-   * @param {number} [opts.msgId] - Client message ID
-   * @param {boolean} [opts.noSeen=false] - Do not mark as read
-   * @param {string} [opts.supplement]
-   * @param {string} [opts.from]
-   * @param {string} [opts.extra]
-   * @param {number} [opts.scope=1]
-   * @param {number} [opts.threadId]
-   * @param {string} [opts.featureStat]
-   * @param {boolean} [opts.silence=false]
+   * Send a text message to a chatroom (LOCO WRITE).
    */
   async sendMessage(chatId: number | string, text: string, type: number | SendOptions = 1, opts: SendOptions = {}) {
     let msgType = typeof type === 'number' ? type : 1;
@@ -1011,67 +735,29 @@ export class KakaoForgeClient extends EventEmitter {
       silence: opts.silence ?? opts.isSilence ?? false,
     };
 
-    // Auto-connect LOCO once if we need to send but aren't connected
     if (!this._carriage && !this._locoAutoConnectAttempted) {
       this._locoAutoConnectAttempted = true;
       try {
         await this.connect();
       } catch (err) {
-        // Continue to Brewery fallback, but keep the original error for context
         if (this.debug) {
           console.error('[DBG] LOCO auto-connect failed:', err.message);
         }
       }
     }
 
-    // Try LOCO first (if connected)
-    if (this._carriage) {
-      return await this._carriage.write(chatId, text, msgType, writeOpts);
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
     }
 
-    // Brewery mode: try POST endpoint (experimental)
-    if (this._brewery) {
-      // Known endpoint candidates from decompiled code analysis
-      const body = JSON.stringify({
-        chatId: String(chatId),
-        msg: text,
-        type: msgType,
-        noSeen: false,
-      });
-
-      try {
-        const res = await this._brewery.request('POST', '/chat/write', {
-          headers: { 'content-type': 'application/json' },
-          body,
-        });
-        if (res.status === 200) {
-          return JSON.parse(res.body.toString('utf8'));
-        }
-        // If /chat/write doesn't work, it might not exist on Brewery
-        throw new Error(`Brewery /chat/write returned ${res.status}`);
-      } catch (err) {
-        throw new Error(
-          `메시지 전송 실패: ${err.message}. ` +
-          'Brewery에는 메시지 전송 엔드포인트가 없을 수 있습니다. ' +
-          'LOCO 연결이 필요합니다.'
-        );
-      }
-    }
-
-    throw new Error('Not connected. Call connectBrewery() or connect() first.');
+    return await this._carriage.write(chatId, text, msgType, writeOpts);
   }
 
-  /**
-   * Send a raw LOCO request (LOCO mode only).
-   */
   async request(method, body = {}) {
     if (!this._carriage) throw new Error('LOCO not connected');
     return await this._carriage.request(method, body);
   }
 
-  /**
-   * Refresh the OAuth token using the refresh token.
-   */
   async refreshAuth() {
     if (!this.refreshToken) {
       throw new Error('No refresh token available');
@@ -1088,40 +774,22 @@ export class KakaoForgeClient extends EventEmitter {
       this.refreshToken = result.refreshToken;
     }
 
-    // Update Brewery client if connected
-    if (this._brewery) {
-      this._brewery._oauthToken = this.oauthToken;
-    }
-
     console.log('[+] Token refreshed');
     return result;
   }
 
-  /**
-   * Check if bot is connected.
-   */
   get connected() {
-    return !!(this._brewery?._connected || this._carriage?._socket);
+    return !!this._carriage?._socket;
   }
 
-  /**
-   * Get the current transport mode.
-   * @returns {'brewery'|'loco'|null}
-   */
   get transport(): TransportMode {
-    if (this._brewery?._connected) return 'brewery';
     if (this._carriage?._socket) return 'loco';
     return null;
   }
 
   disconnect() {
-    this.stopSync();
     if (this._booking) this._booking.disconnect();
     if (this._carriage) this._carriage.disconnect();
-    if (this._brewery) {
-      this._brewery.disconnect();
-      this._brewery = null;
-    }
     this.emit('disconnected');
   }
 }
@@ -1167,7 +835,7 @@ export function createClient(config: KakaoForgeConfig = {}) {
   const client = new KakaoForgeClient(merged);
   const autoConnect = merged.autoConnect !== false;
   if (autoConnect) {
-    client.connectBrewery().catch((err) => {
+    client.connect().catch((err) => {
       client.emit('error', err);
     });
   }
