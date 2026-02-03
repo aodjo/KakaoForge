@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
@@ -56,6 +58,7 @@ export type KakaoForgeConfig = {
   userId?: number;
   oauthToken?: string;
   deviceUuid?: string;
+  authPath?: string;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -69,6 +72,27 @@ export type KakaoForgeConfig = {
   syncInterval?: number;
   autoWatchInterval?: number;
 };
+
+type AuthFile = {
+  userId?: number | string;
+  accessToken?: string;
+  oauthToken?: string;
+  deviceUuid?: string;
+  refreshToken?: string;
+  savedAt?: string;
+};
+
+function loadAuthFile(authPath: string): AuthFile {
+  if (!fs.existsSync(authPath)) {
+    throw new Error(`auth.json not found at ${authPath}. Run: node cli/qr.js or node cli/login.js`);
+  }
+  const raw = fs.readFileSync(authPath, 'utf-8');
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Invalid auth.json at ${authPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1015,7 +1039,44 @@ export class KakaoForgeClient extends EventEmitter {
 }
 
 export function createClient(config: KakaoForgeConfig = {}) {
-  return new KakaoForgeClient(config);
+  let merged: KakaoForgeConfig = { ...config };
+  const missingAuth = !merged.userId || !merged.oauthToken || !merged.deviceUuid;
+
+  if (missingAuth) {
+    const authPath = merged.authPath || path.join(process.cwd(), 'auth.json');
+    let auth: AuthFile;
+    try {
+      auth = loadAuthFile(authPath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[!] ${msg}`);
+      throw err;
+    }
+
+    const authConfig: KakaoForgeConfig = {};
+    if (auth.userId !== undefined && auth.userId !== null && auth.userId !== '') {
+      authConfig.userId = Number(auth.userId);
+    }
+    if (auth.accessToken || auth.oauthToken) {
+      authConfig.oauthToken = auth.accessToken || auth.oauthToken;
+    }
+    if (auth.deviceUuid) {
+      authConfig.deviceUuid = auth.deviceUuid;
+    }
+    if (auth.refreshToken) {
+      authConfig.refreshToken = auth.refreshToken;
+    }
+
+    merged = { ...authConfig, ...merged };
+
+    if (!merged.userId || !merged.oauthToken || !merged.deviceUuid) {
+      const msg = 'auth.json is missing required fields (userId/accessToken/deviceUuid). Please re-authenticate.';
+      console.error(`[!] ${msg}`);
+      throw new Error(msg);
+    }
+  }
+
+  return new KakaoForgeClient(merged);
 }
 
 export const KakaoBot = KakaoForgeClient;
