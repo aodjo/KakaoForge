@@ -57,6 +57,8 @@ export type KakaoForgeConfig = {
   autoReconnect?: boolean;
   reconnectMinDelayMs?: number;
   reconnectMaxDelayMs?: number;
+  memberCacheTtlMs?: number;
+  memberRefreshIntervalMs?: number;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -162,6 +164,8 @@ export class KakaoForgeClient extends EventEmitter {
   autoReconnect: boolean;
   reconnectMinDelayMs: number;
   reconnectMaxDelayMs: number;
+  memberCacheTtlMs: number;
+  memberRefreshIntervalMs: number;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -172,6 +176,9 @@ export class KakaoForgeClient extends EventEmitter {
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Set<string>;
+  _memberListFetchInFlight: Set<string>;
+  _memberCacheUpdatedAt: Map<string, number>;
+  _memberRefreshTimer: NodeJS.Timeout | null;
   _connectPromise: Promise<any> | null;
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
@@ -206,6 +213,12 @@ export class KakaoForgeClient extends EventEmitter {
     this.reconnectMaxDelayMs = typeof config.reconnectMaxDelayMs === 'number'
       ? config.reconnectMaxDelayMs
       : 30000;
+    this.memberCacheTtlMs = typeof config.memberCacheTtlMs === 'number'
+      ? config.memberCacheTtlMs
+      : 10 * 60 * 1000;
+    this.memberRefreshIntervalMs = typeof config.memberRefreshIntervalMs === 'number'
+      ? config.memberRefreshIntervalMs
+      : 60 * 1000;
 
     // LOCO clients
     this._booking = null;
@@ -218,6 +231,9 @@ export class KakaoForgeClient extends EventEmitter {
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Set();
+    this._memberListFetchInFlight = new Set();
+    this._memberCacheUpdatedAt = new Map();
+    this._memberRefreshTimer = null;
     this._connectPromise = null;
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
@@ -344,6 +360,41 @@ export class KakaoForgeClient extends EventEmitter {
     }, delay);
   }
 
+  _startMemberRefresh() {
+    this._stopMemberRefresh();
+    if (!this.memberRefreshIntervalMs || this.memberRefreshIntervalMs <= 0) return;
+
+    this._memberRefreshTimer = setInterval(() => {
+      if (!this._carriage) return;
+      const now = Date.now();
+      for (const [chatId, updatedAt] of this._memberCacheUpdatedAt.entries()) {
+        if (this._shouldRefreshMembers(chatId, now, updatedAt)) {
+          this._fetchMemberList(Number(chatId)).catch(() => {});
+        }
+      }
+    }, this.memberRefreshIntervalMs);
+  }
+
+  _stopMemberRefresh() {
+    if (this._memberRefreshTimer) {
+      clearInterval(this._memberRefreshTimer);
+      this._memberRefreshTimer = null;
+    }
+  }
+
+  _touchMemberCache(chatId: number | string) {
+    this._memberCacheUpdatedAt.set(String(chatId), Date.now());
+  }
+
+  _shouldRefreshMembers(chatId: string, now: number, updatedAt?: number) {
+    if (!this.memberCacheTtlMs || this.memberCacheTtlMs <= 0) return false;
+    const last = typeof updatedAt === 'number'
+      ? updatedAt
+      : this._memberCacheUpdatedAt.get(chatId) || 0;
+    if (!last) return true;
+    return now - last >= this.memberCacheTtlMs;
+  }
+
   /**
    * Connect to KakaoTalk LOCO servers.
    * Requires userId, oauthToken, deviceUuid.
@@ -456,6 +507,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._carriage.on('disconnected', () => {
       console.log('[!] Disconnected from Carriage');
       this.emit('disconnected');
+      this._stopMemberRefresh();
       this._scheduleReconnect();
     });
 
@@ -484,6 +536,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._carriage.startPing(60000);
     console.log('[+] Bot is ready!');
     this.emit('ready', this.chat);
+    this._startMemberRefresh();
 
       return loginRes;
     })();
@@ -572,6 +625,10 @@ export class KakaoForgeClient extends EventEmitter {
     const text = chatLog.message || chatLog.msg || chatLog.text || '';
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
     const logId = safeNumber(chatLog.logId || chatLog.msgId || 0, 0);
+
+    if (roomId) {
+      this._ensureMemberList(roomId);
+    }
     let senderName =
       chatLog.authorName ||
       chatLog.authorNickname ||
@@ -759,6 +816,48 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
+  _ensureMemberList(chatId: number) {
+    const key = String(chatId);
+    if (!this._memberCacheUpdatedAt.has(key)) {
+      this._fetchMemberList(chatId, { force: true }).catch(() => {});
+    }
+  }
+
+  async _fetchMemberList(chatId: number, { force = false }: any = {}) {
+    if (!this._carriage) return;
+    const key = String(chatId);
+    if (this._memberListFetchInFlight.has(key)) return;
+    if (!force && !this._shouldRefreshMembers(key, Date.now())) return;
+
+    this._memberListFetchInFlight.add(key);
+    try {
+      let token = 0;
+      let pages = 0;
+      while (pages < 30) {
+        const res = await this._carriage.memList({ chatId, token, excludeMe: false });
+        const body = res?.body || {};
+        const members = body.members || body.memberList || body.memList || [];
+        if (Array.isArray(members) && members.length > 0) {
+          this._cacheMembers(chatId, members);
+        }
+        const nextToken = safeNumber(
+          body.token || body.nextToken || body.memberToken || 0,
+          0
+        );
+        if (!nextToken || nextToken === token) break;
+        token = nextToken;
+        pages += 1;
+      }
+      this._touchMemberCache(chatId);
+    } catch (err) {
+      if (this.debug) {
+        console.error('[DBG] memList failed:', err.message);
+      }
+    } finally {
+      this._memberListFetchInFlight.delete(key);
+    }
+  }
+
   _getCachedMemberName(chatId: number, userId: number) {
     const map = this._memberNames.get(String(chatId));
     if (!map) return '';
@@ -790,6 +889,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (map.size > 0) {
       this._memberNames.set(key, map);
     }
+    this._touchMemberCache(chatId);
   }
 
   async _fetchMemberName(chatId: number, userId: number) {
@@ -946,6 +1046,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._disconnectRequested = true;
     this._clearReconnectTimer();
     this._reconnectAttempt = 0;
+    this._stopMemberRefresh();
     if (this._booking) this._booking.disconnect();
     if (this._carriage) this._carriage.disconnect();
     this.emit('disconnected');
