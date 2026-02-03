@@ -246,6 +246,18 @@ function toUnixSeconds(value?: number | Date) {
   return num > 1e12 ? Math.floor(num / 1000) : Math.floor(num);
 }
 
+function snapToFiveMinutes(date: Date, mode: 'floor' | 'round' | 'ceil' = 'ceil') {
+  const step = 5 * 60 * 1000;
+  const ms = date.getTime();
+  const remainder = ms % step;
+  if (remainder === 0) return new Date(ms);
+  let snapped: number;
+  if (mode === 'floor') snapped = Math.floor(ms / step) * step;
+  else if (mode === 'round') snapped = Math.round(ms / step) * step;
+  else snapped = Math.ceil(ms / step) * step;
+  return new Date(snapped);
+}
+
 function toDate(value?: number | Date) {
   if (value === undefined || value === null) return null;
   if (value instanceof Date) return value;
@@ -1602,13 +1614,18 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('일정 전송에는 title이 필요합니다.');
     }
 
-    const eventAtDate = toDate(payload.eventAt);
+    let eventAtDate = toDate(payload.eventAt);
     if (!eventAtDate) {
       throw new Error('일정 전송: eventAt 형식이 올바르지 않습니다.');
     }
-    const endAtDate = payload.endAt ? toDate(payload.endAt) : new Date(eventAtDate.getTime() + 60 * 60 * 1000);
+    eventAtDate = snapToFiveMinutes(eventAtDate, 'ceil');
+    let endAtDate = payload.endAt ? toDate(payload.endAt) : new Date(eventAtDate.getTime() + 60 * 60 * 1000);
     if (!endAtDate) {
       throw new Error('일정 전송: endAt 형식이 올바르지 않습니다.');
+    }
+    endAtDate = snapToFiveMinutes(endAtDate, 'ceil');
+    if (endAtDate.getTime() <= eventAtDate.getTime()) {
+      endAtDate = snapToFiveMinutes(new Date(eventAtDate.getTime() + 60 * 60 * 1000), 'ceil');
     }
 
     const chatIdNum = safeNumber(chatId, 0);
