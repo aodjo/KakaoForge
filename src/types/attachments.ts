@@ -1,13 +1,16 @@
-export type AttachmentType =
-  | 'photo'
-  | 'video'
-  | 'audio'
-  | 'file'
-  | 'contact'
-  | 'location'
-  | 'schedule'
-  | 'link'
-  | 'unknown';
+export const AttachmentTypes = {
+  Photo: 'photo',
+  Video: 'video',
+  Audio: 'audio',
+  File: 'file',
+  Contact: 'contact',
+  Location: 'location',
+  Schedule: 'schedule',
+  Link: 'link',
+  Unknown: 'unknown',
+} as const;
+
+export type AttachmentType = typeof AttachmentTypes[keyof typeof AttachmentTypes];
 
 export type AttachmentBase<T extends AttachmentType, D = any> = {
   type: T;

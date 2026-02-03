@@ -2011,6 +2011,8 @@ export function createClient(config: KakaoForgeConfig = {}) {
 
 export const KakaoBot = KakaoForgeClient;
 
+export { AttachmentTypes } from './types/attachments';
+
 export type {
   AttachmentItem,
   AttachmentType,
