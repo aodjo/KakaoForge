@@ -1548,10 +1548,9 @@ export class KakaoForgeClient extends EventEmitter {
 
   _resolveUploadUrl(type: UploadMediaType, override?: string) {
     if (override) return override;
-    if (type === 'photo') return 'https://kage.talk.kakao.com/up/talkimg-bot-secure/';
-    if (type === 'video') return 'https://up-v.talk.kakao.com/upload';
-    if (type === 'audio') return 'https://up-a.talk.kakao.com/upload';
-    return 'https://up-m.talk.kakao.com/upload';
+    if (type === 'photo') return 'https://up-api-kage-moim.kakao.com/up/talk-moim-img/';
+    if (type === 'video') return 'https://up-api-kage-moim.kakao.com/up/talk-moim-video/';
+    return 'https://up-api-kage-moim.kakao.com/up/talk-moim-file/';
   }
 
   _buildUploadHeaders(opts: UploadOptions = {}) {
