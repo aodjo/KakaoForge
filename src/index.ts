@@ -152,7 +152,7 @@ export class KakaoForgeClient extends EventEmitter {
   _carriage: CarriageClient | null;
   _brewery: BreweryClient | null;
 
-  _messageHandler: ((msg: MessageEvent) => void) | null;
+  _messageHandler: ((chat: ChatModule, msg: MessageEvent) => void) | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _breweryEventHandlers: Map<string, (event: BreweryEvent) => void>;
   _chatRooms: Map<string, any>;
@@ -561,7 +561,7 @@ export class KakaoForgeClient extends EventEmitter {
     // gateway/Hello is the initial handshake event
     if (parsed.path === 'gateway/Hello') {
       console.log('[+] Brewery gateway/Hello received');
-      this.emit('ready', parsed);
+      this.emit('ready', this.chat, parsed);
       return;
     }
 
@@ -620,9 +620,9 @@ export class KakaoForgeClient extends EventEmitter {
     };
 
     if (this._messageHandler) {
-      this._messageHandler(msg);
+      this._messageHandler(this.chat, msg);
     }
-    this.emit('message', msg);
+    this.emit('message', this.chat, msg);
   }
 
   /**
@@ -673,7 +673,7 @@ export class KakaoForgeClient extends EventEmitter {
    * Register a message handler.
    * handler(msg) where msg = { chatId, sender, text, type, logId, raw }
    */
-  onMessage(handler: (msg: MessageEvent) => void) {
+  onMessage(handler: (chat: ChatModule, msg: MessageEvent) => void) {
     this._messageHandler = handler;
   }
 
