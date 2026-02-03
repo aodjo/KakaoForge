@@ -59,6 +59,7 @@ export type KakaoForgeConfig = {
   oauthToken?: string;
   deviceUuid?: string;
   authPath?: string;
+  autoConnect?: boolean;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -1075,7 +1076,14 @@ export function createClient(config: KakaoForgeConfig = {}) {
     }
   }
 
-  return new KakaoForgeClient(merged);
+  const client = new KakaoForgeClient(merged);
+  const autoConnect = merged.autoConnect !== false;
+  if (autoConnect) {
+    client.connectBrewery().catch((err) => {
+      client.emit('error', err);
+    });
+  }
+  return client;
 }
 
 export const KakaoBot = KakaoForgeClient;
