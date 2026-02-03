@@ -285,6 +285,17 @@ function inferAttachmentType(raw: any, msgType: number): AttachmentType {
       return 'location';
     }
     if (raw?.name && (raw?.phone || raw?.phones || raw?.email || raw?.vcard)) return 'contact';
+    if (raw?.mt) {
+      const mt = String(raw.mt).toLowerCase();
+      if (mt.startsWith('image/')) return 'photo';
+      if (mt.startsWith('video/')) return 'video';
+      if (mt.startsWith('audio/')) return 'audio';
+    }
+    if (raw?.urls || raw?.imageUrls || raw?.thumbnailUrls || raw?.urlh) return 'photo';
+    if (raw?.d || raw?.duration) {
+      return raw?.mt ? messageTypeToAttachmentType(msgType) : 'video';
+    }
+    if (raw?.name || raw?.filename) return 'file';
     if (raw?.url || raw?.link) return 'link';
   }
   return messageTypeToAttachmentType(msgType);
@@ -305,6 +316,20 @@ function normalizeAttachmentData(type: AttachmentType, raw: any) {
         lng: raw?.lng ?? raw?.longitude ?? null,
         address: raw?.a ?? raw?.address ?? null,
         title: raw?.t ?? raw?.title ?? null,
+      };
+    case 'photo':
+    case 'video':
+    case 'audio':
+    case 'file':
+      return {
+        urls: raw?.urls ?? raw?.imageUrls ?? null,
+        url: raw?.url ?? raw?.urlh ?? null,
+        name: raw?.name ?? raw?.filename ?? null,
+        size: raw?.size ?? raw?.s ?? null,
+        mime: raw?.mt ?? raw?.mime ?? null,
+        width: raw?.w ?? raw?.width ?? null,
+        height: raw?.h ?? raw?.height ?? null,
+        duration: raw?.d ?? raw?.duration ?? null,
       };
     default:
       return raw;
