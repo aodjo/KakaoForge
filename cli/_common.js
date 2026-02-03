@@ -1,4 +1,4 @@
-const readline = require('readline');
+﻿const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 
@@ -23,9 +23,6 @@ function formatKstTimestamp(date = new Date()) {
   return kst.toISOString().replace('Z', '+09:00');
 }
 
-/**
- * readline 기반 프롬프트.
- */
 function prompt(question) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
@@ -36,9 +33,6 @@ function prompt(question) {
   });
 }
 
-/**
- * 패스워드 입력 (입력값 숨김).
- */
 function promptPassword(question) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -62,7 +56,6 @@ function promptPassword(question) {
           process.stdout.write('\b \b');
         }
       } else if (c === '\u0003') {
-        // Ctrl+C
         process.exit(0);
       } else {
         password += c;
@@ -73,19 +66,14 @@ function promptPassword(question) {
   });
 }
 
-/**
- * 봇 연결 후 메시지 핸들러 + REPL 설정.
- */
 function runBot(bot) {
   const mode = bot.transport || 'unknown';
   console.log(`\n[${mode}] 실시간 이벤트 수신 중`);
 
-  // 메시지 핸들러
-  bot.onMessage((chat) => {
-    console.log(`[MSG] chatId=${chat.room.id} sender=${chat.sender.id}: ${chat.msg.text}`);
+  bot.onMessage((chat, msg) => {
+    console.log(`[MSG] chatId=${msg.room.id} sender=${msg.sender.id}: ${msg.msg.text}`);
   });
 
-  // EventEmitter 이벤트 핸들러
   bot.on('ready', () => {
     console.log('[+] 봇 준비 완료');
   });
@@ -100,14 +88,7 @@ function runBot(bot) {
 
   console.log('\n봇이 실행 중입니다. 명령어:');
   console.log('  send <chatId> <메시지>   - 메시지 전송');
-  console.log('  watch <chatId>           - 채팅방 메시지 폴링 시작');
-  console.log('  unwatch <chatId>         - 채팅방 폴링 중지');
-  console.log('  watchall                 - watch all chats (from lastMessageId)');
-  console.log('  autowatch [intervalMs]   - auto watch all chats (refresh list)');
-  console.log('  unwatchall               - stop auto watch + clear watch list');
-  console.log('  sync <chatId> [count]    - 채팅방 메시지 한번 동기화');
-  console.log('  chats                    - 채팅 탭 설정 조회');
-  console.log('  watching                 - 폴링 중인 채팅방 목록');
+  console.log('  chats                    - 채팅방 목록 조회');
   console.log('  debug                    - 디버그 모드 토글');
   console.log('  status                   - 연결 상태');
   console.log('  quit                     - 종료\n');
@@ -123,7 +104,7 @@ function runBot(bot) {
     }
 
     if (trimmed === 'quit' || trimmed === 'exit') {
-      console.log('종료합니다...');
+      console.log('종료합니다..');
       bot.disconnect();
       process.exit(0);
     }
@@ -157,64 +138,6 @@ function runBot(bot) {
           console.error('[!] 전송 실패:', err.message);
         }
       }
-    } else if (trimmed.startsWith('watch ')) {
-      const chatId = trimmed.substring(6).trim();
-      if (!chatId) {
-        console.log('usage: watch <chatId>');
-      } else {
-        bot.watchChat(chatId);
-        if (!bot._syncTimer) {
-          bot.startSync();
-        }
-        console.log(`[+] watching chat ${chatId}`);
-      }
-    } else if (trimmed === 'watchall') {
-      try {
-        const added = await bot.watchAllChats();
-        if (!bot._syncTimer) {
-          bot.startSync();
-        }
-        console.log(`[+] watchall: ${added} chats`);
-      } catch (err) {
-        console.error('[!] watchall failed:', err.message);
-      }
-    } else if (trimmed.startsWith('autowatch')) {
-      const parts = trimmed.split(/\s+/);
-      const interval = parseInt(parts[1]) || undefined;
-      bot.startAutoWatchAll({ intervalMs: interval });
-    } else if (trimmed === 'unwatchall') {
-      bot.stopAutoWatchAll();
-      bot.unwatchAllChats();
-      console.log('[-] watch list cleared');
-    } else if (trimmed.startsWith('unwatch ')) {
-      const chatId = trimmed.substring(8).trim();
-      if (!chatId) {
-        console.log('usage: unwatch <chatId>');
-      } else {
-        bot.unwatchChat(chatId);
-        console.log(`[-] stopped watching chat ${chatId}`);
-      }
-    } else if (trimmed.startsWith('sync ')) {
-      const parts = trimmed.substring(5).trim().split(/\s+/);
-      const chatId = parts[0];
-      const count = parseInt(parts[1]) || 50;
-      if (!chatId) {
-        console.log('사용법: sync <chatId> [count]');
-      } else {
-        try {
-          console.log(`[*] 채팅방 ${chatId} 동기화 중 (count=${count})...`);
-          const result = await bot.syncMessages(chatId, { count });
-          console.log(`[+] 동기화 완료: ${result.content ? result.content.length : 0}개 메시지, size=${result.size}, last=${result.last}`);
-          if (result.content) {
-            for (const meta of result.content) {
-              const preview = (meta.content || '').substring(0, 100);
-              console.log(`  logId=${meta.logId} type=${meta.type} chatId=${meta.chatId}: ${preview}`);
-            }
-          }
-        } catch (err) {
-          console.error('[!] 동기화 실패:', err.message);
-        }
-      }
     } else if (trimmed === 'chats' || trimmed === 'chatlist') {
       try {
         console.log('[*] 채팅방 목록 조회 중...');
@@ -225,8 +148,9 @@ function runBot(bot) {
           for (const chat of chats) {
             const members = chat.displayMembers
               ? chat.displayMembers.map(m => m.nickname || m.nickName || '?').join(', ')
-              : '';
-            console.log(`  chatId=${chat.chatId} type=${chat.type} unread=${chat.unreadCount || 0} title="${chat.title || ''}" [${members}]`);
+              : (Array.isArray(chat.displayNickNames) ? chat.displayNickNames.join(', ') : '');
+            const title = chat.title || chat.roomName || '';
+            console.log(`  chatId=${chat.chatId} type=${chat.type} unread=${chat.unreadCount || 0} title="${title}" [${members}]`);
           }
         } else {
           console.log('[*] 채팅방 목록이 비어있습니다.');
@@ -235,120 +159,8 @@ function runBot(bot) {
       } catch (err) {
         console.error('[!] getChatRooms 실패:', err.message);
       }
-    } else if (trimmed === 'probe') {
-      // 여러 엔드포인트를 시도해서 채팅방 목록을 찾음
-      const paths = [
-        '/messaging/chats',
-        '/messaging/chats?fetchCount=20',
-        '/chat/rooms',
-        '/chat/list',
-        '/chat/chats',
-        '/chats',
-        '/chats?fetchCount=20',
-        '/alcatraz/chats',
-        '/alcatraz/chats?fetchCount=20',
-        '/alcatraz/drawer/chats?fetchCount=20',
-        '/messaging/chat-folders',
-        '/messaging/sync',
-        '/sync',
-        '/init',
-        '/messaging/init',
-      ];
-      console.log(`[*] ${paths.length}개 엔드포인트 시도 중...`);
-      for (const p of paths) {
-        try {
-          const res = await bot.breweryRequest('GET', p, { timeout: 8000 });
-          const body = res.body.toString('utf8').substring(0, 300);
-          console.log(`  ${res.status} ${p} → ${body}`);
-        } catch (err) {
-          console.log(`  ERR ${p} → ${err.message}`);
-        }
-      }
-    } else if (trimmed.startsWith('sendprobe')) {
-      const chatId = trimmed.substring(9).trim() || '455007773985318';
-      const path = `/messaging/chats/${chatId}/messages`;
-      const bodies = [
-        { msg: 'test', type: 1 },
-        { message: 'test', type: 1 },
-        { content: 'test', type: 1 },
-        { text: 'test', type: 1 },
-        { msg: 'test', type: 1, chatId },
-        { message: 'test', messageType: 1 },
-        { content: 'test', msgType: 1 },
-        { body: 'test', type: 'text' },
-        { msg: 'test', type: 1, noSeen: false },
-        'msg=test&type=1',
-      ];
-      const endpoints = bodies.map((b, i) => ['POST', path, b, `body#${i}: ${JSON.stringify(b).substring(0, 60)}`]);
-      console.log(`[*] ${path} 에 ${endpoints.length}개 body 변형 시도 중...`);
-      for (const [method, p, body, label] of endpoints) {
-        try {
-          const res = await bot.breweryRequest(method, p, { body, timeout: 8000 });
-          const resp = res.body.toString('utf8').substring(0, 300);
-          console.log(`  ${res.status} ${label} → ${resp}`);
-        } catch (err) {
-          console.log(`  ERR ${label} → ${err.message}`);
-        }
-      }
-    } else if (trimmed.startsWith('loco')) {
-      // GETCONF → CHECKIN 순서로 시도
-      const { BookingClient } = require('../src/net/booking-client');
-      const { Long } = require('bson');
-      const uid = Long.fromNumber(typeof bot.userId === 'number' ? bot.userId : parseInt(bot.userId));
-      console.log(`[*] userId=${bot.userId}`);
-
-      const booking = new BookingClient();
-      await booking.connect();
-      console.log('[+] Booking 연결됨');
-
-      // Step 1: GETCONF (body: MCCMNC, os, userId만 - GetConfJob.kt 분석 결과)
-      console.log('[*] GETCONF 전송...');
-      let confBody = null;
-      try {
-        const confRes = await booking.request('GETCONF', {
-          MCCMNC: '450,05',
-          os: 'android',
-          userId: uid,
-        });
-        confBody = confRes.body;
-        console.log(`[*] GETCONF 응답: status=${confRes.status}, method=${confRes.method}`);
-        console.log('[*] GETCONF body:', JSON.stringify(confBody).substring(0, 800));
-      } catch (err) {
-        console.log(`[!] GETCONF ERR: ${err.message}`);
-      }
-
-      // Step 2: CHECKIN (body: userId, os, ntype, appVer, lang, MCCMNC - CheckInJob.kt)
-      console.log('[*] CHECKIN 전송...');
-      try {
-        const checkinRes = await booking.request('CHECKIN', {
-          userId: uid,
-          os: 'android',
-          ntype: 0,
-          appVer: '26.1.2',
-          lang: 'ko',
-          MCCMNC: '450,05',
-        });
-        console.log(`[*] CHECKIN 응답: status=${checkinRes.status}, method=${checkinRes.method}`);
-        console.log('[*] CHECKIN body:', JSON.stringify(checkinRes.body).substring(0, 800));
-      } catch (err) {
-        console.log(`[!] CHECKIN ERR: ${err.message}`);
-      }
-
-      booking.disconnect();
-    } else if (trimmed === 'watching') {
-      const ids = [...bot._syncChatIds];
-      if (ids.length === 0) {
-        console.log('[*] 폴링 중인 채팅방 없음');
-      } else {
-        console.log(`[*] 폴링 중인 채팅방 (${ids.length}개):`);
-        for (const id of ids) {
-          const room = bot._chatRooms.get(id) || {};
-          console.log(`  chatId=${id} lastLogId=${room.lastLogId || 0}`);
-        }
-      }
-      console.log(`[*] 동기화 타이머: ${bot._syncTimer ? 'ON' : 'OFF'}`);
     } else {
-      console.log('알 수 없는 명령어. send / watch / unwatch / sync / chats / watching / debug / status / quit');
+      console.log('알 수 없는 명령어입니다. send / chats / debug / status / quit');
     }
 
     rl.prompt();
@@ -360,15 +172,12 @@ function runBot(bot) {
   });
 
   process.on('SIGINT', () => {
-    console.log('\n종료합니다...');
+    console.log('\n종료합니다..');
     bot.disconnect();
     process.exit(0);
   });
 }
 
-/**
- * 인증 정보 저장.
- */
 function saveAuth(data) {
   const payload = {
     userId: data.userId,
@@ -382,9 +191,6 @@ function saveAuth(data) {
   return payload;
 }
 
-/**
- * 저장된 인증 정보 로드.
- */
 function loadAuth() {
   if (!fs.existsSync(AUTH_FILE)) return null;
   try {
