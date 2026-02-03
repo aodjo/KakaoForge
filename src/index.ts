@@ -6,9 +6,11 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
-import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
+import { uploadMultipartFile } from './net/upload-client';
+import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId, buildAuthorizationHeader, buildUserAgent, buildAHeader } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
+import { guessMime, readImageSize } from './util/media';
 
 export type TransportMode = 'loco' | null;
 
@@ -51,10 +53,35 @@ export type SendOptions = {
   type?: number;
 };
 
-export type AttachmentInput = Record<string, any> | string;
+export type AttachmentInput = Record<string, any> | string | UploadResult | { attachment: any };
 
 export type AttachmentSendOptions = SendOptions & {
   text?: string;
+};
+
+export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file';
+
+export type UploadOptions = {
+  uploadUrl?: string;
+  headers?: Record<string, string>;
+  fields?: Record<string, any>;
+  fieldName?: string;
+  filename?: string;
+  name?: string;
+  mime?: string;
+  width?: number;
+  height?: number;
+  duration?: number;
+  timeoutMs?: number;
+  onProgress?: (sent: number, total: number) => void;
+  auth?: boolean;
+};
+
+export type UploadResult = {
+  accessKey: string;
+  attachment: Record<string, any>;
+  info?: any;
+  raw: any;
 };
 
 export type LocationPayload = {
@@ -153,6 +180,10 @@ function loadAuthFile(authPath: string): AuthFile {
 export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
+  uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
+  uploadAudio: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
+  uploadFile: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   sendPhoto: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendVideo: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendAudio: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
@@ -221,6 +252,14 @@ function parseAttachments(raw: any): any[] {
   if (Array.isArray(parsed)) return parsed;
   if (typeof parsed === 'object') return [parsed];
   return [];
+}
+
+function unwrapAttachment(input: any) {
+  if (!input || typeof input !== 'object') return input;
+  if ('attachment' in input && (input as any).attachment !== undefined) {
+    return (input as any).attachment;
+  }
+  return input;
 }
 
 
@@ -586,6 +625,10 @@ export class KakaoForgeClient extends EventEmitter {
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
+      uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
+      uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
+      uploadAudio: (filePath, opts) => this.uploadAudio(filePath, opts),
+      uploadFile: (filePath, opts) => this.uploadFile(filePath, opts),
       sendPhoto: (chatId, attachment, opts) => this.sendPhoto(chatId, attachment, opts),
       sendVideo: (chatId, attachment, opts) => this.sendVideo(chatId, attachment, opts),
       sendAudio: (chatId, attachment, opts) => this.sendAudio(chatId, attachment, opts),
@@ -1501,6 +1544,138 @@ export class KakaoForgeClient extends EventEmitter {
     return await this._carriage.write(chatId, text, msgType, writeOpts);
   }
 
+  _resolveUploadUrl(type: UploadMediaType, override?: string) {
+    if (override) return override;
+    if (type === 'video') return 'https://up-v.talk.kakao.com/upload';
+    if (type === 'audio') return 'https://up-a.talk.kakao.com/upload';
+    return 'https://up-m.talk.kakao.com/upload';
+  }
+
+  _buildUploadHeaders(opts: UploadOptions = {}) {
+    const headers: Record<string, string> = {
+      'User-Agent': buildUserAgent(this.appVer),
+      'A': buildAHeader(this.appVer, this.lang),
+      'Accept': '*/*',
+    };
+    if (opts.auth && this.oauthToken) {
+      const deviceId = this.deviceId || this.deviceUuid;
+      if (deviceId) {
+        headers['Authorization'] = buildAuthorizationHeader(this.oauthToken, deviceId);
+      }
+    }
+    if (opts.headers) {
+      Object.assign(headers, opts.headers);
+    }
+    return headers;
+  }
+
+  async _uploadMedia(type: UploadMediaType, filePath: string, opts: UploadOptions = {}): Promise<UploadResult> {
+    if (!filePath) {
+      throw new Error('filePath is required');
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (err) {
+      throw new Error(`file not found: ${filePath}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`not a file: ${filePath}`);
+    }
+
+    const fallbackMime = type === 'photo'
+      ? 'image/jpeg'
+      : type === 'video'
+        ? 'video/mp4'
+        : type === 'audio'
+          ? 'audio/mpeg'
+          : 'application/octet-stream';
+    const mime = opts.mime || guessMime(filePath, fallbackMime);
+    const uploadUrl = this._resolveUploadUrl(type, opts.uploadUrl);
+    const headers = this._buildUploadHeaders(opts);
+
+    const res = await uploadMultipartFile({
+      url: uploadUrl,
+      filePath,
+      fieldName: opts.fieldName,
+      filename: opts.filename,
+      mime,
+      headers,
+      fields: opts.fields,
+      timeoutMs: opts.timeoutMs,
+      onProgress: opts.onProgress,
+    });
+
+    const json = res?.json;
+    const accessKey = json?.access_key
+      || json?.accessKey
+      || json?.key
+      || json?.result?.access_key
+      || json?.result?.accessKey
+      || json?.data?.access_key
+      || json?.data?.accessKey;
+
+    if (!accessKey) {
+      const preview = res?.body ? String(res.body).slice(0, 400) : '';
+      throw new Error(`upload response missing access_key: ${preview}`);
+    }
+
+    const attachment: Record<string, any> = {
+      tk: accessKey,
+    };
+
+    if (type === 'file') {
+      attachment.name = opts.name || opts.filename || path.basename(filePath);
+      attachment.size = stat.size;
+      if (mime) {
+        attachment.mime = mime;
+      }
+    } else {
+      attachment.s = stat.size;
+      if (mime) {
+        attachment.mt = mime;
+      }
+
+      let width = opts.width;
+      let height = opts.height;
+      if (type === 'photo' && (!width || !height)) {
+        const size = readImageSize(filePath);
+        if (size) {
+          width = width || size.width;
+          height = height || size.height;
+        }
+      }
+      if (width) attachment.w = width;
+      if (height) attachment.h = height;
+      if (opts.duration) attachment.d = opts.duration;
+    }
+
+    const info = json?.info || json?.data?.info || json?.result?.info;
+    return {
+      accessKey: String(accessKey),
+      attachment,
+      info,
+      raw: res,
+    };
+  }
+
+  async uploadPhoto(filePath: string, opts: UploadOptions = {}) {
+    return this._uploadMedia('photo', filePath, opts);
+  }
+
+  async uploadVideo(filePath: string, opts: UploadOptions = {}) {
+    return this._uploadMedia('video', filePath, opts);
+  }
+
+  async uploadAudio(filePath: string, opts: UploadOptions = {}) {
+    return this._uploadMedia('audio', filePath, opts);
+  }
+
+  async uploadFile(filePath: string, opts: UploadOptions = {}) {
+    return this._uploadMedia('file', filePath, opts);
+  }
+
   async _sendWithAttachment(
     chatId: number | string,
     type: number,
@@ -1509,7 +1684,7 @@ export class KakaoForgeClient extends EventEmitter {
     opts: AttachmentSendOptions = {},
     label = 'attachment'
   ) {
-    const extra = buildExtra(attachment, opts.extra);
+    const extra = buildExtra(unwrapAttachment(attachment), opts.extra);
     if (!extra) {
       throw new Error(`${label} attachment is required. Upload first and pass attachment info.`);
     }
@@ -1522,22 +1697,22 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   async sendPhoto(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(attachment);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
     return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, opts, 'photo');
   }
 
   async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(attachment);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
     return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, opts, 'video');
   }
 
   async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeMediaAttachment(attachment);
+    const normalized = normalizeMediaAttachment(unwrapAttachment(attachment));
     return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, opts, 'audio');
   }
 
   async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeFileAttachment(attachment);
+    const normalized = normalizeFileAttachment(unwrapAttachment(attachment));
     return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, opts, 'file');
   }
 
