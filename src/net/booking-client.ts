@@ -1,18 +1,18 @@
-const tls = require('tls');
-const { EventEmitter } = require('events');
-const { Long } = require('bson');
-const { LocoPacket } = require('../protocol/loco-packet');
-const { LocoStream } = require('./loco-stream');
+import * as tls from 'tls';
+import { EventEmitter } from 'events';
+import { Long } from 'bson';
+import { LocoPacket } from '../protocol/loco-packet';
+import { LocoStream } from './loco-stream';
 
-const BOOKING_HOST = 'booking-loco.kakao.com';
-const BOOKING_PORT = 443;
+export const BOOKING_HOST = 'booking-loco.kakao.com';
+export const BOOKING_PORT = 443;
 
-function normalizeStringList(list) {
+function normalizeStringList(list: any[]) {
   if (!Array.isArray(list)) return [];
   return [...new Set(list.map((v) => String(v).trim()).filter(Boolean))];
 }
 
-function normalizePortList(list) {
+function normalizePortList(list: any[]) {
   if (!Array.isArray(list)) return [];
   const ports = list
     .map((v) => Number(v))
@@ -20,7 +20,7 @@ function normalizePortList(list) {
   return [...new Set(ports)];
 }
 
-function normalizeGetConf(body = {}) {
+function normalizeGetConf(body: any = {}) {
   const ticket = body.ticket || body.ticketInfo || body.TicketInfo || {};
   const lsl = normalizeStringList(ticket.lsl);
   const lsl6 = normalizeStringList(ticket.lsl6);
@@ -45,7 +45,11 @@ function normalizeGetConf(body = {}) {
  * Booking server connection (SSL/TLS).
  * Used for CHECKIN to get the Carriage server address.
  */
-class BookingClient extends EventEmitter {
+export class BookingClient extends EventEmitter {
+  _socket: tls.TLSSocket | null;
+  _stream: LocoStream;
+  _pendingRequests: Map<number, any>;
+
   constructor() {
     super();
     this._socket = null;
@@ -56,7 +60,7 @@ class BookingClient extends EventEmitter {
     this._stream.on('error', (err) => this.emit('error', err));
   }
 
-  connect(host = BOOKING_HOST, port = BOOKING_PORT) {
+  connect(host = BOOKING_HOST, port = BOOKING_PORT): Promise<void> {
     return new Promise((resolve, reject) => {
       this._socket = tls.connect(port, host, {
         rejectUnauthorized: true,
@@ -85,7 +89,7 @@ class BookingClient extends EventEmitter {
   /**
    * Send a LOCO request and wait for the response.
    */
-  request(method, body = {}, timeout = 10000) {
+  request(method: string, body: any = {}, timeout = 10000): Promise<any> {
     return new Promise((resolve, reject) => {
       const packetId = this._stream.nextPacketId();
       const packet = new LocoPacket(packetId, 0, method, body);
@@ -104,8 +108,8 @@ class BookingClient extends EventEmitter {
   /**
    * Send CHECKIN to get Carriage server address.
    */
-  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '45005' }) {
-    const body = {
+  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '45005' }: any) {
+    const body: any = {
       userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
       os,
       ntype,
@@ -129,8 +133,8 @@ class BookingClient extends EventEmitter {
   /**
    * Send GETCONF to retrieve Ticket hosts and port lists.
    */
-  async getConf({ userId, os = 'android', mccmnc = '45005' }) {
-    const body = {
+  async getConf({ userId, os = 'android', mccmnc = '45005' }: any) {
+    const body: any = {
       userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
       mccmnc,
       os,
@@ -140,7 +144,7 @@ class BookingClient extends EventEmitter {
     return normalizeGetConf(res.body);
   }
 
-  _onPacket(packet) {
+  _onPacket(packet: any) {
     const pending = this._pendingRequests.get(packet.packetId);
     if (pending) {
       clearTimeout(pending.timer);
@@ -163,5 +167,3 @@ class BookingClient extends EventEmitter {
     this._pendingRequests.clear();
   }
 }
-
-module.exports = { BookingClient, BOOKING_HOST, BOOKING_PORT };

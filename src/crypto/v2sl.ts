@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import * as crypto from 'crypto';
 
 // RSA public key from KakaoTalk APK (kq/d.java)
 const RSA_MODULUS = Buffer.from(
@@ -14,13 +14,16 @@ const RSA_MODULUS = Buffer.from(
 );
 const RSA_EXPONENT = 3;
 
-const AES_KEY_SIZE = 16;       // 128 bits
-const AES_IV_SIZE = 12;        // GCM nonce
+export const AES_KEY_SIZE = 16;       // 128 bits
+export const AES_IV_SIZE = 12;        // GCM nonce
 const GCM_TAG_BITS = 128;
 const ENCRYPTION_TYPE = 3;     // AES_GCM128
 const MAX_BLOCK_SIZE = 131068;
 
-class V2SLCrypto {
+export class V2SLCrypto {
+  aesKey: Buffer;
+  handshaked: boolean;
+
   constructor() {
     this.aesKey = crypto.randomBytes(AES_KEY_SIZE);
     this.handshaked = false;
@@ -49,7 +52,7 @@ class V2SLCrypto {
   /**
    * RSA-OAEP encrypt the AES key for handshake
    */
-  rsaEncrypt(data) {
+  rsaEncrypt(data: Buffer) {
     const pubKey = this._getRsaPublicKey();
     return crypto.publicEncrypt(
       {
@@ -86,7 +89,7 @@ class V2SLCrypto {
    *   [12 bytes] random IV
    *   [N bytes]  AES-GCM ciphertext + tag
    */
-  encrypt(plaintext) {
+  encrypt(plaintext: Buffer) {
     const iv = crypto.randomBytes(AES_IV_SIZE);
     const cipher = crypto.createCipheriv('aes-128-gcm', this.aesKey, iv);
 
@@ -108,7 +111,7 @@ class V2SLCrypto {
    *   Read [block_size - 12 bytes] ciphertext + tag
    *   Decrypt and return plaintext
    */
-  decrypt(blockBuf) {
+  decrypt(blockBuf: Buffer) {
     const blockSize = blockBuf.readInt32LE(0);
     if (blockSize > MAX_BLOCK_SIZE) {
       throw new Error(`V2SL block too large: ${blockSize}`);
@@ -132,10 +135,8 @@ class V2SLCrypto {
    * Read a single encrypted block from a buffer reader.
    * Returns { data, bytesConsumed } or null if not enough data.
    */
-  static blockSize(buf) {
+  static blockSize(buf: Buffer) {
     if (buf.length < 4) return null;
     return buf.readInt32LE(0) + 4; // block_size + 4 bytes for the size field
   }
 }
-
-module.exports = { V2SLCrypto, AES_KEY_SIZE, AES_IV_SIZE };

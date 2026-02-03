@@ -1,10 +1,15 @@
-const { BSON } = require('bson');
+import { BSON } from 'bson';
 
-const HEADER_SIZE = 22;
+export const HEADER_SIZE = 22;
 const METHOD_LENGTH = 11;
 
-class LocoPacket {
-  constructor(packetId, status, method, body = {}) {
+export class LocoPacket {
+  packetId: number;
+  status: number;
+  method: string;
+  body: any;
+
+  constructor(packetId: number, status: number, method: string, body: any = {}) {
     this.packetId = packetId;
     this.status = status;
     this.method = method;
@@ -32,7 +37,7 @@ class LocoPacket {
     return Buffer.concat([header, bodyBytes]);
   }
 
-  static parseHeader(buf) {
+  static parseHeader(buf: Buffer) {
     if (buf.length < HEADER_SIZE) return null;
 
     const packetId = buf.readInt32LE(0);
@@ -49,12 +54,12 @@ class LocoPacket {
     return { packetId, status, method, bodyLength };
   }
 
-  static parseBody(bodyBuf) {
+  static parseBody(bodyBuf: Buffer) {
     if (bodyBuf.length === 0) return {};
     return BSON.deserialize(bodyBuf);
   }
 
-  static fromBuffer(buf) {
+  static fromBuffer(buf: Buffer) {
     const header = LocoPacket.parseHeader(buf);
     if (!header) return null;
 
@@ -68,5 +73,3 @@ class LocoPacket {
     return `LocoPacket(id=${this.packetId}, status=${this.status}, method=${this.method}, bodyLen=${JSON.stringify(this.body).length})`;
   }
 }
-
-module.exports = { LocoPacket, HEADER_SIZE };

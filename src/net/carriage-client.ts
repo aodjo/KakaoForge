@@ -1,14 +1,22 @@
-const net = require('net');
-const { EventEmitter } = require('events');
-const { Long } = require('bson');
-const { LocoPacket, HEADER_SIZE } = require('../protocol/loco-packet');
-const { V2SLCrypto } = require('../crypto/v2sl');
+import * as net from 'net';
+import { EventEmitter } from 'events';
+import { Long } from 'bson';
+import { LocoPacket, HEADER_SIZE } from '../protocol/loco-packet';
+import { V2SLCrypto } from '../crypto/v2sl';
 
 /**
  * Carriage server connection (V2SL encrypted).
  * Used for LOGINLIST and all messaging after CHECKIN.
  */
-class CarriageClient extends EventEmitter {
+export class CarriageClient extends EventEmitter {
+  _socket: net.Socket | null;
+  _crypto: V2SLCrypto;
+  _pendingRequests: Map<number, any>;
+  _packetIdCounter: number;
+  _recvBuffer: Buffer;
+  _decryptedBuffer: Buffer;
+  _pingInterval: NodeJS.Timeout | null;
+
   constructor() {
     super();
     this._socket = null;
@@ -27,7 +35,7 @@ class CarriageClient extends EventEmitter {
   /**
    * Connect to the Carriage server and perform V2SL handshake.
    */
-  connect(host, port, timeout = 10000) {
+  connect(host: string, port: number, timeout = 10000): Promise<void> {
     return new Promise((resolve, reject) => {
       this._socket = new net.Socket();
       this._socket.setNoDelay(true);
@@ -70,7 +78,7 @@ class CarriageClient extends EventEmitter {
    * Handle incoming encrypted data.
    * Decrypt V2SL blocks and parse LOCO packets.
    */
-  _onData(data) {
+  _onData(data: Buffer) {
     this._recvBuffer = Buffer.concat([this._recvBuffer, data]);
 
     // Try to decrypt complete V2SL blocks
@@ -114,7 +122,7 @@ class CarriageClient extends EventEmitter {
     }
   }
 
-  _onPacket(packet) {
+  _onPacket(packet: any) {
     const pending = this._pendingRequests.get(packet.packetId);
     if (pending) {
       clearTimeout(pending.timer);
@@ -129,7 +137,7 @@ class CarriageClient extends EventEmitter {
   /**
    * Send a LOCO request and wait for the response.
    */
-  request(method, body = {}, timeout = 10000) {
+  request(method: string, body: any = {}, timeout = 10000): Promise<any> {
     return new Promise((resolve, reject) => {
       const packetId = this.nextPacketId();
       const packet = new LocoPacket(packetId, 0, method, body);
@@ -164,7 +172,7 @@ class CarriageClient extends EventEmitter {
     lastTokenId = 0,
     lbk = 0,
     bg = false,
-  }) {
+  }: any) {
     const body = {
       os,
       appVer,
@@ -186,13 +194,13 @@ class CarriageClient extends EventEmitter {
   /**
    * Send a message to a chatroom.
    */
-  async write(chatId, text, type = 1, opts = {}) {
+  async write(chatId: number | string, text: string, type = 1, opts: any = {}) {
     const toLong = (v) => {
       if (Long.isLong(v)) return v;
       return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
     };
 
-    const body = {
+    const body: any = {
       chatId: toLong(chatId),
       msg: text,
       type,
@@ -263,5 +271,3 @@ class CarriageClient extends EventEmitter {
     this._pendingRequests.clear();
   }
 }
-
-module.exports = { CarriageClient };

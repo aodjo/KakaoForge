@@ -1,10 +1,89 @@
-const { EventEmitter } = require('events');
-const { BookingClient } = require('./net/booking-client');
-const { CarriageClient } = require('./net/carriage-client');
-const { TicketClient } = require('./net/ticket-client');
-const { BreweryClient } = require('./net/brewery-client');
-const { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } = require('./auth/login');
-const { nextClientMsgId } = require('./util/client-msg-id');
+import { EventEmitter } from 'events';
+import { BookingClient } from './net/booking-client';
+import { CarriageClient } from './net/carriage-client';
+import { TicketClient } from './net/ticket-client';
+import { BreweryClient } from './net/brewery-client';
+import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } from './auth/login';
+import { nextClientMsgId } from './util/client-msg-id';
+
+export type TransportMode = 'brewery' | 'loco' | null;
+
+export type MessageEvent = {
+  chatId: number;
+  sender: number;
+  text: string;
+  type: number;
+  logId: number;
+  raw: any;
+};
+
+export type BreweryEvent = {
+  path: string;
+  type: string;
+  payload: any;
+  raw: any;
+};
+
+export type SyncOptions = {
+  since?: number;
+  count?: number;
+};
+
+export type WatchAllOptions = {
+  includeHistory?: boolean;
+  forceUpdate?: boolean;
+};
+
+export type SendOptions = {
+  msgId?: number;
+  noSeen?: boolean;
+  supplement?: string;
+  from?: string;
+  extra?: string;
+  scope?: number;
+  threadId?: number;
+  featureStat?: string;
+  silence?: boolean;
+  isSilence?: boolean;
+  type?: number;
+};
+
+export type AutoWatchOptions = {
+  intervalMs?: number;
+};
+
+export type KakaoForgeConfig = {
+  userId?: number;
+  oauthToken?: string;
+  deviceUuid?: string;
+  os?: string;
+  appVer?: string;
+  lang?: string;
+  mccmnc?: string;
+  MCCMNC?: string;
+  ntype?: number;
+  networkType?: number;
+  useSub?: boolean;
+  refreshToken?: string;
+  debug?: boolean;
+  syncInterval?: number;
+  autoWatchInterval?: number;
+};
+
+export type ChatModule = {
+  sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  watch: (chatId: number | string, lastLogId?: number) => void;
+  unwatch: (chatId: number | string) => void;
+  watchAll: (opts?: WatchAllOptions) => Promise<number>;
+  unwatchAll: () => void;
+  startSync: (intervalMs?: number) => void;
+  stopSync: () => void;
+  startAutoWatch: (opts?: AutoWatchOptions) => void;
+  stopAutoWatch: () => void;
+  list: () => Promise<any>;
+  sync: (chatId: number | string, opts?: SyncOptions) => Promise<any>;
+};
 
 function uniqueStrings(list) {
   if (!Array.isArray(list)) return [];
@@ -31,8 +110,36 @@ function uniqueNumbers(list) {
  *   - 'disconnected': Bot disconnected
  *   - 'error'       : Error occurred
  */
-class KakaoBot extends EventEmitter {
-  constructor(config = {}) {
+export class KakaoForgeClient extends EventEmitter {
+  userId: number;
+  oauthToken: string;
+  deviceUuid: string;
+  os: string;
+  appVer: string;
+  lang: string;
+  mccmnc: string;
+  ntype: number;
+  useSub: boolean;
+  refreshToken: string;
+  debug: boolean;
+  chat: ChatModule;
+
+  _booking: BookingClient | null;
+  _carriage: CarriageClient | null;
+  _brewery: BreweryClient | null;
+
+  _messageHandler: ((msg: MessageEvent) => void) | null;
+  _pushHandlers: Map<string, (payload: any) => void>;
+  _breweryEventHandlers: Map<string, (event: BreweryEvent) => void>;
+  _chatRooms: Map<string, any>;
+
+  _syncTimer: NodeJS.Timeout | null;
+  _syncInterval: number;
+  _syncChatIds: Set<string>;
+  _autoWatchTimer: NodeJS.Timeout | null;
+  _autoWatchInterval: number;
+
+  constructor(config: KakaoForgeConfig = {}) {
     super();
     this.userId = config.userId || 0;
     this.oauthToken = config.oauthToken || '';
@@ -72,6 +179,21 @@ class KakaoBot extends EventEmitter {
     this._syncChatIds = new Set(); // chatIds to poll
     this._autoWatchTimer = null;
     this._autoWatchInterval = config.autoWatchInterval || 60000; // 60s default
+
+    this.chat = {
+      sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
+      send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
+      watch: (chatId, lastLogId) => this.watchChat(chatId, lastLogId),
+      unwatch: (chatId) => this.unwatchChat(chatId),
+      watchAll: (opts) => this.watchAllChats(opts),
+      unwatchAll: () => this.unwatchAllChats(),
+      startSync: (intervalMs) => this.startSync(intervalMs),
+      stopSync: () => this.stopSync(),
+      startAutoWatch: (opts) => this.startAutoWatchAll(opts),
+      stopAutoWatch: () => this.stopAutoWatchAll(),
+      list: () => this.getChatRooms(),
+      sync: (chatId, opts) => this.syncMessages(chatId, opts),
+    };
   }
 
   _nextClientMsgId() {
@@ -92,7 +214,7 @@ class KakaoBot extends EventEmitter {
    * @param {boolean} [opts.checkAllowlist] - Check allowlist.json before login (sub-device)
    * @param {boolean} [opts.enforceAllowlist] - Throw if not allowlisted (sub-device)
    */
-  async login({ email, password, deviceName, modelName, forced = false, checkAllowlist, enforceAllowlist, useBrewery = false }) {
+  async login({ email, password, deviceName, modelName, forced = false, checkAllowlist, enforceAllowlist, useBrewery = false }: any) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
@@ -148,7 +270,7 @@ class KakaoBot extends EventEmitter {
     onQrUrl,
     onPasscode,
     useBrewery = false,
-  } = {}) {
+  }: any = {}) {
     if (!this.deviceUuid) {
       this.deviceUuid = generateDeviceUuid();
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
@@ -388,7 +510,7 @@ class KakaoBot extends EventEmitter {
    * Routes events to registered handlers, detects chat messages,
    * and emits appropriate events.
    */
-  _onBreweryEvent(parsed) {
+  _onBreweryEvent(parsed: BreweryEvent) {
     // Debug: log all raw events
     if (this.debug) {
       const payloadPreview = parsed.payload
@@ -462,7 +584,7 @@ class KakaoBot extends EventEmitter {
   /**
    * Emit a normalized message event.
    */
-  _emitMessage(data) {
+  _emitMessage(data: any) {
     const chatLog = data.chatLog || data;
     const msg = {
       chatId: data.chatId || chatLog.chatId || 0,
@@ -484,7 +606,7 @@ class KakaoBot extends EventEmitter {
    * Event paths: 'talk/ProfileUpdated', 'chat/SettingsUpdated', etc.
    * handler(event) where event = { path, type, payload, raw }
    */
-  onBreweryEvent(path, handler) {
+  onBreweryEvent(path: string, handler: (event: BreweryEvent) => void) {
     this._breweryEventHandlers.set(path, handler);
   }
 
@@ -527,14 +649,14 @@ class KakaoBot extends EventEmitter {
    * Register a message handler.
    * handler(msg) where msg = { chatId, sender, text, type, logId, raw }
    */
-  onMessage(handler) {
+  onMessage(handler: (msg: MessageEvent) => void) {
     this._messageHandler = handler;
   }
 
   /**
    * Register a push handler for a specific LOCO method or Brewery event path.
    */
-  onPush(method, handler) {
+  onPush(method: string, handler: (payload: any) => void) {
     this._pushHandlers.set(method, handler);
   }
 
@@ -550,7 +672,7 @@ class KakaoBot extends EventEmitter {
    * @param {number} [opts.count=50] - Number of messages to fetch
    * @returns {Promise<Array>} Array of LogMeta objects
    */
-  async syncMessages(chatId, { since = 0, count = 50 } = {}) {
+  async syncMessages(chatId: number | string, { since = 0, count = 50 }: SyncOptions = {}) {
     if (!this._brewery) throw new Error('Brewery not connected');
 
     const room = this._chatRooms.get(String(chatId)) || {};
@@ -595,7 +717,7 @@ class KakaoBot extends EventEmitter {
    * @param {boolean} [desc=false]
    * @returns {Promise<Object>} { content: [LogMeta], size, last }
    */
-  async getMessages(chatId, from, to, desc = false) {
+  async getMessages(chatId: number | string, from: number, to: number, desc = false) {
     if (!this._brewery) throw new Error('Brewery not connected');
     return await this._brewery.getMessages(chatId, from, to, desc);
   }
@@ -607,7 +729,7 @@ class KakaoBot extends EventEmitter {
    * @param {number|string} chatId
    * @param {number} [lastLogId=0] - Start polling from this logId
    */
-  watchChat(chatId, lastLogId = 0) {
+  watchChat(chatId: number | string, lastLogId = 0) {
     const key = String(chatId);
     this._syncChatIds.add(key);
     if (lastLogId) {
@@ -619,7 +741,7 @@ class KakaoBot extends EventEmitter {
   /**
    * Remove a chat room from the polling list.
    */
-  unwatchChat(chatId) {
+  unwatchChat(chatId: number | string) {
     this._syncChatIds.delete(String(chatId));
   }
 
@@ -627,7 +749,7 @@ class KakaoBot extends EventEmitter {
    * Start periodic message polling for watched chats.
    * @param {number} [intervalMs] - Poll interval (default: syncInterval from config)
    */
-  startSync(intervalMs) {
+  startSync(intervalMs?: number) {
     this.stopSync();
     const interval = intervalMs || this._syncInterval;
 
@@ -665,7 +787,7 @@ class KakaoBot extends EventEmitter {
    * @param {boolean} [opts.forceUpdate=false] - Override existing watch cursors
    * @returns {Promise<number>} number of chats added/updated
    */
-  async watchAllChats({ includeHistory = false, forceUpdate = false } = {}) {
+  async watchAllChats({ includeHistory = false, forceUpdate = false }: WatchAllOptions = {}) {
     if (!this._brewery) throw new Error('Brewery not connected');
     const result = await this.getChatRooms();
     const chats = result.chats || [];
@@ -705,7 +827,7 @@ class KakaoBot extends EventEmitter {
    * @param {Object} [opts]
    * @param {number} [opts.intervalMs] - refresh interval
    */
-  startAutoWatchAll({ intervalMs } = {}) {
+  startAutoWatchAll({ intervalMs }: AutoWatchOptions = {}) {
     this.stopAutoWatchAll();
     const interval = intervalMs || this._autoWatchInterval;
 
@@ -773,10 +895,11 @@ class KakaoBot extends EventEmitter {
    * @param {string} [opts.featureStat]
    * @param {boolean} [opts.silence=false]
    */
-  async sendMessage(chatId, text, type = 1, opts = {}) {
+  async sendMessage(chatId: number | string, text: string, type: number | SendOptions = 1, opts: SendOptions = {}) {
+    let msgType = typeof type === 'number' ? type : 1;
     if (type && typeof type === 'object') {
       opts = type;
-      type = typeof opts.type === 'number' ? opts.type : 1;
+      msgType = typeof opts.type === 'number' ? opts.type : 1;
     }
     if (!opts || typeof opts !== 'object') opts = {};
 
@@ -791,7 +914,7 @@ class KakaoBot extends EventEmitter {
 
     // Try LOCO first (if connected)
     if (this._carriage) {
-      return await this._carriage.write(chatId, text, type, writeOpts);
+      return await this._carriage.write(chatId, text, msgType, writeOpts);
     }
 
     // Brewery mode: try POST endpoint (experimental)
@@ -800,7 +923,7 @@ class KakaoBot extends EventEmitter {
       const body = JSON.stringify({
         chatId: String(chatId),
         msg: text,
-        type,
+        type: msgType,
         noSeen: false,
       });
 
@@ -873,7 +996,7 @@ class KakaoBot extends EventEmitter {
    * Get the current transport mode.
    * @returns {'brewery'|'loco'|null}
    */
-  get transport() {
+  get transport(): TransportMode {
     if (this._brewery?._connected) return 'brewery';
     if (this._carriage?._socket) return 'loco';
     return null;
@@ -891,4 +1014,9 @@ class KakaoBot extends EventEmitter {
   }
 }
 
-module.exports = { KakaoBot };
+export function createClient(config: KakaoForgeConfig = {}) {
+  return new KakaoForgeClient(config);
+}
+
+export const KakaoBot = KakaoForgeClient;
+export type KakaoBot = KakaoForgeClient;

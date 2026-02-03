@@ -1,9 +1,9 @@
-const http2 = require('http2');
-const { EventEmitter } = require('events');
-const protobuf = require('protobufjs');
+import * as http2 from 'http2';
+import { EventEmitter } from 'events';
+import * as protobuf from 'protobufjs';
 
-const BREWERY_HOST = 'talk-pilsner.kakao.com';
-const BREWERY_PORT = 443;
+export const BREWERY_HOST = 'talk-pilsner.kakao.com';
+export const BREWERY_PORT = 443;
 const APP_VER = '26.1.2';
 
 /**
@@ -16,7 +16,7 @@ const APP_VER = '26.1.2';
  *   bytes padding = 4;
  * }
  */
-const EventProto = new protobuf.Type('Event')
+export const EventProto = new protobuf.Type('Event')
   .add(new protobuf.Field('path', 1, 'string'))
   .add(new protobuf.Field('type', 2, 'string'))
   .add(new protobuf.Field('payload', 3, 'bytes'))
@@ -39,8 +39,19 @@ const LEN_PREFIX_SIZE = 4;
  *   client.on('event', (event) => { ... });
  *   client.startListen();
  */
-class BreweryClient extends EventEmitter {
-  constructor({ oauthToken, deviceUuid = '', lang = 'ko', appVer = APP_VER }) {
+export class BreweryClient extends EventEmitter {
+  _oauthToken: string;
+  _deviceUuid: string;
+  _lang: string;
+  _appVer: string;
+  _session: http2.ClientHttp2Session | null;
+  _listenStream: http2.ClientHttp2Stream | null;
+  _pingTimer: NodeJS.Timeout | null;
+  _lastSubscribed: number;
+  _listenBuffer: Buffer;
+  _connected: boolean;
+
+  constructor({ oauthToken, deviceUuid = '', lang = 'ko', appVer = APP_VER }: any) {
     super();
     this._oauthToken = oauthToken;
     this._deviceUuid = deviceUuid;
@@ -57,7 +68,7 @@ class BreweryClient extends EventEmitter {
   /**
    * Common headers for all brewery requests (PILSNER auth).
    */
-  _headers(extra = {}) {
+  _headers(extra: Record<string, string> = {}) {
     return {
       'authorization': `${this._oauthToken}-${this._deviceUuid}`,
       'talk-agent': `android/${this._appVer}`,
@@ -69,7 +80,7 @@ class BreweryClient extends EventEmitter {
   /**
    * Connect HTTP/2 session to talk-pilsner.kakao.com.
    */
-  connect() {
+  connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this._session = http2.connect(`https://${BREWERY_HOST}:${BREWERY_PORT}`);
 
@@ -106,7 +117,7 @@ class BreweryClient extends EventEmitter {
    * @param {Buffer|string} [body] - Request body
    * @returns {Promise<{status: number, headers: Object, body: Buffer}>}
    */
-  request(method, path, { headers = {}, body = null, timeout = 10000 } = {}) {
+  request(method: string, path: string, { headers = {}, body = null, timeout = 10000 }: any = {}): Promise<any> {
     return new Promise((resolve, reject) => {
       const reqHeaders = {
         ':method': method,
@@ -249,7 +260,7 @@ class BreweryClient extends EventEmitter {
       this._listenBuffer = this._listenBuffer.slice(LEN_PREFIX_SIZE + msgLen);
 
       try {
-        const event = EventProto.decode(msgBytes);
+        const event: any = EventProto.decode(msgBytes);
         const payloadStr = event.payload && event.payload.length > 0
           ? Buffer.from(event.payload).toString('utf8')
           : null;
@@ -301,7 +312,7 @@ class BreweryClient extends EventEmitter {
    * Send push acknowledgment.
    * @param {Object} body - Ack payload
    */
-  async pushAck(body) {
+  async pushAck(body: any) {
     return this.request('POST', '/push-tracker/pushAck', {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -311,14 +322,14 @@ class BreweryClient extends EventEmitter {
   /**
    * Generic GET request to a brewery path.
    */
-  async get(path, headers = {}) {
+  async get(path: string, headers: Record<string, string> = {}) {
     return this.request('GET', path, { headers });
   }
 
   /**
    * Generic POST request to a brewery path.
    */
-  async post(path, body, headers = {}) {
+  async post(path: string, body: any, headers: Record<string, string> = {}) {
     return this.request('POST', path, {
       headers: { 'content-type': 'application/json', ...headers },
       body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -328,7 +339,7 @@ class BreweryClient extends EventEmitter {
   /**
    * Parse JSON response body, returning null on failure.
    */
-  _parseJson(res) {
+  _parseJson(res: any) {
     try {
       return JSON.parse(res.body.toString('utf8'));
     } catch {
@@ -347,7 +358,7 @@ class BreweryClient extends EventEmitter {
    * @param {number} [opts.cnt=50] - Number of messages to fetch
    * @returns {Promise<{content: Array, size: number, last: boolean}>}
    */
-  async syncMessages(chatId, { cur = 0, max = 0, cnt = 50 } = {}) {
+  async syncMessages(chatId: number | string, { cur = 0, max = 0, cnt = 50 }: any = {}) {
     const path = `/messaging/chats/${chatId}/bubble/sync-meta?cur=${cur}&max=${max}&cnt=${cnt}`;
     const res = await this.request('GET', path, { timeout: 15000 });
 
@@ -367,7 +378,7 @@ class BreweryClient extends EventEmitter {
    * @param {boolean} [desc=false] - Descending order
    * @returns {Promise<{content: Array, size: number, last: boolean}>}
    */
-  async getMessages(chatId, from, to, desc = false) {
+  async getMessages(chatId: number | string, from: number, to: number, desc = false) {
     const path = `/messaging/chats/${chatId}/bubble/meta?from=${from}&to=${to}&desc=${desc}`;
     const res = await this.request('GET', path, { timeout: 15000 });
 
@@ -430,5 +441,3 @@ class BreweryClient extends EventEmitter {
     this._connected = false;
   }
 }
-
-module.exports = { BreweryClient, BREWERY_HOST, BREWERY_PORT, EventProto };

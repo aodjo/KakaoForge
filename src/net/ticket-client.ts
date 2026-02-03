@@ -1,16 +1,16 @@
-const { Long } = require('bson');
-const { CarriageClient } = require('./carriage-client');
+import { Long } from 'bson';
+import { CarriageClient } from './carriage-client';
 
 /**
  * Ticket server connection (V2SL encrypted).
  * Used for CHECKIN to get the Carriage server address.
  */
-class TicketClient extends CarriageClient {
+export class TicketClient extends CarriageClient {
   /**
    * Send CHECKIN to get Carriage server address.
    */
-  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '45005' }) {
-    const body = {
+  async checkin({ userId, os = 'android', appVer = '26.1.2', lang = 'ko', ntype = 0, useSub = false, mccmnc = '45005' }: any) {
+    const body: any = {
       userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
       os,
       ntype,
@@ -31,5 +31,3 @@ class TicketClient extends CarriageClient {
     };
   }
 }
-
-module.exports = { TicketClient };

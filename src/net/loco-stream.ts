@@ -1,11 +1,14 @@
-const { EventEmitter } = require('events');
-const { LocoPacket, HEADER_SIZE } = require('../protocol/loco-packet');
+import { EventEmitter } from 'events';
+import { LocoPacket, HEADER_SIZE } from '../protocol/loco-packet';
 
 /**
  * Handles framing of LOCO packets over a raw byte stream.
  * Works for both SSL (plain) and V2SL (encrypted) connections.
  */
-class LocoStream extends EventEmitter {
+export class LocoStream extends EventEmitter {
+  _buffer: Buffer;
+  _packetIdCounter: number;
+
   constructor() {
     super();
     this._buffer = Buffer.alloc(0);
@@ -20,7 +23,7 @@ class LocoStream extends EventEmitter {
    * Feed raw bytes into the stream parser.
    * Emits 'packet' events for each complete LOCO packet.
    */
-  feed(data) {
+  feed(data: Buffer) {
     this._buffer = Buffer.concat([this._buffer, data]);
     this._tryParse();
   }
@@ -45,5 +48,3 @@ class LocoStream extends EventEmitter {
     }
   }
 }
-
-module.exports = { LocoStream };

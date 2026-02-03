@@ -1,9 +1,15 @@
 const MAX_MOD = 2147483547;
 const STEP = 100;
 
-const stateBySeed = new Map();
+type MsgIdState = {
+  deviceHash: number;
+  lastId: number;
+  lastGenId: number;
+};
 
-function javaStringHash(str) {
+const stateBySeed = new Map<string, MsgIdState>();
+
+function javaStringHash(str: string) {
   let hash = 0;
   for (let i = 0; i < str.length; i += 1) {
     hash = (hash * 31 + str.charCodeAt(i)) | 0;
@@ -11,12 +17,12 @@ function javaStringHash(str) {
   return hash;
 }
 
-function baseId(timeMillis, deviceHash) {
+function baseId(timeMillis: number, deviceHash: number) {
   const base = Math.floor((timeMillis % MAX_MOD) / STEP) * STEP;
   return base + deviceHash;
 }
 
-function getState(seed) {
+function getState(seed: string) {
   const key = seed || '';
   let state = stateBySeed.get(key);
   if (!state) {
@@ -32,7 +38,7 @@ function getState(seed) {
   return state;
 }
 
-function nextClientMsgId(seed, timeMillis = Date.now()) {
+export function nextClientMsgId(seed: string, timeMillis: number = Date.now()) {
   const state = getState(seed);
   const gen = baseId(timeMillis, state.deviceHash);
 
@@ -50,5 +56,3 @@ function nextClientMsgId(seed, timeMillis = Date.now()) {
   state.lastGenId = gen;
   return state.lastId;
 }
-
-module.exports = { nextClientMsgId };

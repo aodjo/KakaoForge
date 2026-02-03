@@ -1,19 +1,19 @@
-const https = require('https');
-const zlib = require('zlib');
-const { URL } = require('url');
-const crypto = require('crypto');
-const { generateXVCHeader } = require('./crypto');
+import * as https from 'https';
+import * as zlib from 'zlib';
+import { URL } from 'url';
+import * as crypto from 'crypto';
+import { generateXVCHeader } from './crypto';
 
-const KATALK_HOST = 'katalk.kakao.com';
-const AUTH_HOST = 'auth.kakao.com';
+export const KATALK_HOST = 'katalk.kakao.com';
+export const AUTH_HOST = 'auth.kakao.com';
 
 // Default Android KakaoTalk-like values
-const DEFAULT_APP_VER = '26.1.2';
+export const DEFAULT_APP_VER = '26.1.2';
 const DEFAULT_OS_VER = '14';
 const DEFAULT_DEVICE_NAME = 'KakaoForge';
 const DEFAULT_MODEL_NAME = 'SM-G998N';
 // QR 로그인은 태블릿 모델만 허용 (allowlist.json 기준)
-const DEFAULT_QR_MODEL_NAME = 'SM-T733';
+export const DEFAULT_QR_MODEL_NAME = 'SM-T733';
 // QR 서비스는 별도 OkHttpClient 사용 → User-Agent가 다름
 const QR_USER_AGENT = 'okhttp/4.12.0';
 
@@ -27,7 +27,7 @@ function generateDeviceUuid() {
 /**
  * Make an HTTPS POST request with form-encoded body.
  */
-function httpsPost(host, path, formData, headers = {}) {
+function httpsPost(host, path, formData, headers = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     const body = new URLSearchParams();
     for (const [key, value] of Object.entries(formData)) {
@@ -76,7 +76,7 @@ function httpsPost(host, path, formData, headers = {}) {
 /**
  * Make an HTTPS POST request with JSON body.
  */
-function httpsPostJson(host, path, jsonData, headers = {}) {
+function httpsPostJson(host, path, jsonData, headers = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     const bodyStr = JSON.stringify(jsonData);
 
@@ -123,7 +123,7 @@ function httpsPostJson(host, path, jsonData, headers = {}) {
 /**
  * Make an HTTPS GET request (JSON expected).
  */
-function httpsGet(host, path, headers = {}) {
+function httpsGet(host, path, headers = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     const defaultHeaders = {
       'Accept': '*/*',
@@ -200,7 +200,7 @@ function buildQrAuthHeaders({
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
   userAgent = QR_USER_AGENT,
-} = {}) {
+}: any = {}) {
   const headers = {
     'Authorization': buildAuthorizationHeader(accessToken, deviceUuid),
     'A': buildAHeader(appVer, lang),
@@ -264,7 +264,7 @@ async function subDeviceAllowList({
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
   osVer = DEFAULT_OS_VER,
-} = {}) {
+}: any = {}) {
   if (!modelName) {
     throw new Error('modelName is required for allowlist check');
   }
@@ -318,7 +318,7 @@ async function subDeviceLogin({
   checkAllowlist = true,
   enforceAllowlist = false,
   appVer = DEFAULT_APP_VER,
-}) {
+}: any) {
   if (!deviceUuid) {
     deviceUuid = generateDeviceUuid();
   }
@@ -402,7 +402,7 @@ async function refreshOAuthToken({
   refreshToken,
   deviceUuid,
   appVer = DEFAULT_APP_VER,
-}) {
+}: any) {
   const xvc = generateXVCHeader(deviceUuid, '');
 
   const formData = {
@@ -460,8 +460,8 @@ async function qrGenerate({
   osVer = DEFAULT_OS_VER,
   previousId = null,
   appVer = DEFAULT_APP_VER,
-}) {
-  const jsonData = {
+}: any) {
+  const jsonData: any = {
     device: {
       name: deviceName || modelName,
       uuid: deviceUuid,
@@ -512,7 +512,7 @@ async function qrInfo({
   deviceUuid,
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
-} = {}) {
+}: any = {}) {
   const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
   const path = `/android/account/qrCodeLogin/info?id=${encodeURIComponent(extractQrId(qrId))}`;
   const res = await httpsGet(KATALK_HOST, path, headers);
@@ -543,8 +543,8 @@ async function qrPollLogin({
   deviceUuid,
   qrId,
   appVer = DEFAULT_APP_VER,
-}) {
-  const jsonData = {
+}: any) {
+  const jsonData: any = {
     device: {
       uuid: deviceUuid,
     },
@@ -585,12 +585,12 @@ async function qrAuthorize({
   forceLogin = false,
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
-} = {}) {
+}: any = {}) {
   const macResponse = generateQrMacResponse(qrId, refreshToken);
   const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
   headers['Content-Type'] = 'application/json';
 
-  const jsonData = {
+  const jsonData: any = {
     id: extractQrId(qrId),
     macResponse,
     forceLogin: !!forceLogin,
@@ -623,11 +623,11 @@ async function qrDeny({
   deviceUuid,
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
-} = {}) {
+}: any = {}) {
   const headers = buildQrAuthHeaders({ accessToken, deviceUuid, appVer, lang });
   headers['Content-Type'] = 'application/json';
 
-  const jsonData = { id: extractQrId(qrId) };
+  const jsonData: any = { id: extractQrId(qrId) };
 
   const res = await httpsPostJson(
     KATALK_HOST,
@@ -661,8 +661,8 @@ async function qrConfirm({
   deviceUuid,
   appVer = DEFAULT_APP_VER,
   lang = 'ko',
-}) {
-  const jsonData = {
+}: any) {
+  const jsonData: any = {
     id: extractQrId(qrId),
     passcode,
   };
@@ -701,8 +701,8 @@ async function qrCancel({
   deviceUuid,
   qrId,
   appVer = DEFAULT_APP_VER,
-}) {
-  const jsonData = {
+}: any) {
+  const jsonData: any = {
     device: {
       uuid: deviceUuid,
     },
@@ -757,7 +757,7 @@ async function qrLogin({
   appVer = DEFAULT_APP_VER,
   onQrUrl = null,
   onPasscode = null,
-}) {
+}: any) {
   if (!deviceUuid) {
     deviceUuid = generateDeviceUuid();
   }
@@ -858,7 +858,7 @@ async function qrLogin({
   throw new Error('QR login timed out');
 }
 
-module.exports = {
+export {
   subDeviceLogin,
   subDeviceAllowList,
   refreshOAuthToken,
@@ -880,8 +880,4 @@ module.exports = {
   httpsPost,
   httpsPostJson,
   httpsGet,
-  KATALK_HOST,
-  AUTH_HOST,
-  DEFAULT_APP_VER,
-  DEFAULT_QR_MODEL_NAME,
 };

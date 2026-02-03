@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import * as crypto from 'crypto';
 
 /**
  * Password encryption for KakaoTalk sub-device login.
@@ -6,9 +6,9 @@ const crypto = require('crypto');
  *
  * From decompiled: CZ/C9844a.java (AES256.kt)
  */
-const ENCRYPT_KEY = 'jEibeliJAhlEeyoOnjuNg';
+export const ENCRYPT_KEY = 'jEibeliJAhlEeyoOnjuNg';
 
-function encryptPassword(password) {
+export function encryptPassword(password: string) {
   // Key: padded to 32 bytes with zeros
   const keyBuf = Buffer.alloc(32, 0);
   const keyBytes = Buffer.from(ENCRYPT_KEY, 'utf-8');
@@ -23,7 +23,7 @@ function encryptPassword(password) {
   return encrypted.toString('base64');
 }
 
-function decryptPassword(encryptedBase64) {
+export function decryptPassword(encryptedBase64: string) {
   const keyBuf = Buffer.alloc(32, 0);
   const keyBytes = Buffer.from(ENCRYPT_KEY, 'utf-8');
   keyBytes.copy(keyBuf, 0, 0, Math.min(keyBytes.length, 32));
@@ -45,15 +45,8 @@ function decryptPassword(encryptedBase64) {
  * From decompiled: LO/h.java (XVCHeader.kt)
  * Format: SHA512("BARD|{deviceUuid}|DANTE|{accountKey}|SIAN").substring(0, 16)
  */
-function generateXVCHeader(deviceUuid, accountKey) {
+export function generateXVCHeader(deviceUuid: string, accountKey: string) {
   const raw = `BARD|${deviceUuid}|DANTE|${accountKey}|SIAN`;
   const hash = crypto.createHash('sha512').update(raw, 'utf-8').digest('hex');
   return hash.substring(0, 16);
 }
-
-module.exports = {
-  encryptPassword,
-  decryptPassword,
-  generateXVCHeader,
-  ENCRYPT_KEY,
-};
