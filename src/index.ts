@@ -302,6 +302,8 @@ function extractEventId(body: any) {
 }
 
 function ensureScheduleAttachment(base: any, fallback: any) {
+  if (typeof base === 'string') return base;
+  if (Array.isArray(base)) return base;
   const result: any = typeof base === 'object' && base ? { ...base } : {};
   if (result.eventAt === undefined && fallback.eventAt !== undefined) result.eventAt = fallback.eventAt;
   if (!result.title && fallback.title) result.title = fallback.title;
@@ -1712,7 +1714,7 @@ export class KakaoForgeClient extends EventEmitter {
       postId,
     });
 
-    if (payload.extra && typeof payload.extra === 'object') {
+    if (payload.extra && typeof payload.extra === 'object' && attachment && typeof attachment === 'object' && !Array.isArray(attachment)) {
       attachment = { ...attachment, ...payload.extra };
     }
 
