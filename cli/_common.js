@@ -71,7 +71,7 @@ function runBot(bot) {
   console.log(`\n[${mode}] 실시간 이벤트 수신 중`);
 
   bot.onMessage((chat, msg) => {
-    console.log(`[MSG] chatId=${msg.room.id} sender=${msg.sender.id}: ${msg.msg.text}`);
+    console.log(`[MSG] chatId=${msg.room.id} sender=${msg.sender.id}: ${msg.message.text}`);
   });
 
   bot.on('ready', () => {

@@ -11,7 +11,7 @@ import { nextClientMsgId } from './util/client-msg-id';
 export type TransportMode = 'loco' | null;
 
 export type MessageEvent = {
-  msg: {
+  message: {
     id: number;
     text: string;
     type: number;
@@ -694,7 +694,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const msg: MessageEvent = {
-      msg: { id: logId, text, type, logId },
+      message: { id: logId, text, type, logId },
       sender: { id: senderId, name: senderName },
       room: { id: roomId, name: roomName },
       raw: data,
