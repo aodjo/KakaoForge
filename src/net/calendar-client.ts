@@ -1,4 +1,4 @@
-import { buildAHeader, buildAuthorizationHeader, buildDeviceId, buildLegacyDeviceId, buildUserAgent, httpsGet, httpsPostJson } from '../auth/login';
+import { buildAHeader, buildAuthorizationHeader, buildDeviceId, buildUserAgent, httpsGet, httpsPostJson } from '../auth/login';
 
 export const CALENDAR_HOST = 'talk-pilsner.kakao.com';
 const CALENDAR_BASE = '/calendar/talk';
@@ -56,23 +56,9 @@ export class CalendarClient {
     this.dtype = opts.dtype !== undefined && opts.dtype !== null ? String(opts.dtype) : '1';
   }
 
-  _authDevices() {
-    const candidates: string[] = [];
-    if (this.deviceId) candidates.push(this.deviceId);
-    if (this.deviceUuid) candidates.push(this.deviceUuid);
-    try {
-      const legacy = buildLegacyDeviceId(this.deviceUuid);
-      if (legacy) candidates.push(legacy);
-    } catch {
-      // ignore
-    }
-    return Array.from(new Set(candidates.filter(Boolean)));
-  }
-
-  _headers(extra: Record<string, string> = {}, authDevice?: string) {
-    const device = authDevice || this.deviceId || this.deviceUuid;
+  _headers(extra: Record<string, string> = {}) {
     return {
-      'Authorization': buildAuthorizationHeader(this.oauthToken, device),
+      'Authorization': buildAuthorizationHeader(this.oauthToken, this.deviceId || this.deviceUuid),
       'A': buildAHeader(this.appVer, this.lang),
       'User-Agent': buildUserAgent(this.appVer),
       'talk-agent': `${this.os}/${this.appVer}`,
@@ -93,48 +79,27 @@ export class CalendarClient {
     }
   }
 
-  async _requestWithFallback(requestFn: (authDevice: string) => Promise<any>) {
-    const devices = this._authDevices();
-    let lastRes: any = null;
-    for (const device of devices) {
-      lastRes = await requestFn(device);
-      if (lastRes?.status !== 401) {
-        if (device && device !== this.deviceId) {
-          this.deviceId = device;
-        }
-        return lastRes;
-      }
-    }
-    return lastRes;
-  }
-
   async createEvent(event: any, { referer, templateId, originalEId }: any = {}) {
     const query = buildQuery({ referer, templateId, originalEId });
     const path = `${CALENDAR_BASE}/events${query}`;
-    return await this._requestWithFallback(async (authDevice) => {
-      const res = await httpsPostJson(CALENDAR_HOST, path, event, this._headers({}, authDevice));
-      this._captureHeaders(res);
-      return res;
-    });
+    const res = await httpsPostJson(CALENDAR_HOST, path, event, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 
   async connectEvent(eId: string, chatId: number | string, referer?: string) {
     const query = buildQuery({ eId, chatId, referer });
     const path = `${CALENDAR_BASE}/chat/connectEvent${query}`;
-    return await this._requestWithFallback(async (authDevice) => {
-      const res = await httpsPostJson(CALENDAR_HOST, path, {}, this._headers({}, authDevice));
-      this._captureHeaders(res);
-      return res;
-    });
+    const res = await httpsPostJson(CALENDAR_HOST, path, {}, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 
   async shareMessage(eId: string, referer?: string) {
     const query = buildQuery({ eId, referer });
     const path = `${CALENDAR_BASE}/chat/shareMessage${query}`;
-    return await this._requestWithFallback(async (authDevice) => {
-      const res = await httpsGet(CALENDAR_HOST, path, this._headers({}, authDevice));
-      this._captureHeaders(res);
-      return res;
-    });
+    const res = await httpsGet(CALENDAR_HOST, path, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 }

@@ -204,18 +204,6 @@ function buildDeviceId(deviceUuid) {
 }
 
 /**
- * Build legacy device id (SHA-1) from device UUID.
- * KakaoTalk falls back to SHA when d_id is not stored.
- */
-function buildLegacyDeviceId(deviceUuid) {
-  if (!deviceUuid) {
-    throw new Error('deviceUuid is required to build legacy deviceId');
-  }
-  const seed = `dkljleskljfeisflssljeif ${deviceUuid}`;
-  return crypto.createHash('sha1').update(seed, 'utf-8').digest('hex');
-}
-
-/**
  * Build headers for QR login authorization endpoints (main device).
  */
 function buildQrAuthHeaders({
@@ -432,12 +420,9 @@ async function refreshOAuthToken({
   if (!accessToken) {
     throw new Error('accessToken is required for token refresh');
   }
-
-  const candidates = Array.from(new Set([
-    deviceUuid,
-    buildDeviceId(deviceUuid),
-    buildLegacyDeviceId(deviceUuid),
-  ].filter(Boolean)));
+  if (!deviceUuid) {
+    throw new Error('deviceUuid is required for token refresh');
+  }
 
   const jsonData = {
     access_token: accessToken,
@@ -445,74 +430,32 @@ async function refreshOAuthToken({
     grant_type: 'refresh_token',
   };
 
-  const tryJson = async (authDevice: string) => {
-    const headers = {
-      'Authorization': buildAuthorizationHeader(accessToken, authDevice),
-      'User-Agent': buildUserAgent(appVer),
-      'A': buildAHeader(appVer, lang),
-      'Accept-Language': lang,
-      'C': crypto.randomUUID(),
-      'Connection': 'Close',
-    };
-    return await httpsPostJson(
-      KATALK_HOST,
-      '/android/account/oauth2_token.json',
-      jsonData,
-      headers,
-    );
+  const authDevice = buildDeviceId(deviceUuid);
+  const headers = {
+    'Authorization': buildAuthorizationHeader(accessToken, authDevice),
+    'User-Agent': buildUserAgent(appVer),
+    'A': buildAHeader(appVer, lang),
+    'Accept-Language': lang,
+    'C': crypto.randomUUID(),
+    'Connection': 'Close',
   };
+  const res = await httpsPostJson(
+    KATALK_HOST,
+    '/android/account/oauth2_token.json',
+    jsonData,
+    headers,
+  );
 
-  const tryForm = async (authDevice: string) => {
-    const headers = {
-      'Authorization': buildAuthorizationHeader(accessToken, authDevice),
-      'User-Agent': buildUserAgent(appVer),
-      'A': buildAHeader(appVer, lang),
-      'Accept-Language': lang,
-      'C': crypto.randomUUID(),
-      'Connection': 'Close',
-      'X-VC': generateXVCHeader(deviceUuid, ''),
+  if (res.status === 200 && (!res.body?.status || res.body.status === 0)) {
+    return {
+      accessToken: res.body.access_token,
+      refreshToken: res.body.refresh_token || refreshToken,
+      tokenType: res.body.token_type,
+      expiresIn: res.body.expires_in,
     };
-    const formData = {
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      grant_type: 'refresh_token',
-    };
-    return await httpsPost(
-      KATALK_HOST,
-      '/android/account/oauth2_token.json',
-      formData,
-      headers,
-    );
-  };
-
-  let lastErr: any = null;
-  for (const authDevice of candidates) {
-    const res = await tryJson(authDevice);
-    if (res.status === 200 && (!res.body?.status || res.body.status === 0)) {
-      return {
-        accessToken: res.body.access_token,
-        refreshToken: res.body.refresh_token || refreshToken,
-        tokenType: res.body.token_type,
-        expiresIn: res.body.expires_in,
-      };
-    }
-    lastErr = res;
   }
 
-  for (const authDevice of candidates) {
-    const res = await tryForm(authDevice);
-    if (res.status === 200 && (!res.body?.status || res.body.status === 0)) {
-      return {
-        accessToken: res.body.access_token,
-        refreshToken: res.body.refresh_token || refreshToken,
-        tokenType: res.body.token_type,
-        expiresIn: res.body.expires_in,
-      };
-    }
-    lastErr = res;
-  }
-
-  const body = lastErr?.body ?? lastErr;
+  const body = res?.body ?? res;
   throw new Error(`Token refresh failed: ${JSON.stringify(body)}`);
 }
 
@@ -953,7 +896,6 @@ export {
   qrLogin,
   buildAuthorizationHeader,
   buildDeviceId,
-  buildLegacyDeviceId,
   buildQrAuthHeaders,
   generateQrMacResponse,
   extractQrId,
