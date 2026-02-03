@@ -1710,6 +1710,18 @@ export class KakaoForgeClient extends EventEmitter {
     assertCalendarOk(shareRes, '일정 공유');
     let attachment = extractShareMessageData(shareRes?.body);
     attachment = normalizeScheduleShareData(attachment);
+    if (this.debug) {
+      const sharePreview = previewCalendarBody(shareRes?.body, 1200);
+      if (sharePreview) {
+        console.log('[DBG] schedule shareMessage body:', sharePreview);
+      }
+      const extraPreview = buildExtra(attachment);
+      if (extraPreview) {
+        const max = 1200;
+        const trimmed = extraPreview.length > max ? `${extraPreview.slice(0, max)}...` : extraPreview;
+        console.log(`[DBG] schedule extra (${extraPreview.length}):`, trimmed);
+      }
+    }
 
     const scheduleIdCandidate = parseInt(String(eId).split('_')[0], 10);
     const scheduleId = Number.isFinite(scheduleIdCandidate) ? scheduleIdCandidate : undefined;
