@@ -11,12 +11,27 @@ import { nextClientMsgId } from './util/client-msg-id';
 export type TransportMode = 'brewery' | 'loco' | null;
 
 export type MessageEvent = {
+  msg: {
+    id: number;
+    text: string;
+    type: number;
+    logId: number;
+  };
+  sender: {
+    id: number;
+    name: string;
+  };
+  room: {
+    id: number;
+    name: string;
+  };
+  raw: any;
+  // Legacy aliases for compatibility
   chatId: number;
-  sender: number;
+  senderId: number;
   text: string;
   type: number;
   logId: number;
-  raw: any;
 };
 
 export type BreweryEvent = {
@@ -120,6 +135,19 @@ function uniqueNumbers(list) {
   return [...new Set(nums)];
 }
 
+function resolveRoomName(chat: any): string {
+  if (!chat) return '';
+  const title = String(chat.title || '').trim();
+  if (title) return title;
+  const members = Array.isArray(chat.displayMembers)
+    ? chat.displayMembers
+        .map((m: any) => m.nickname || m.nickName || m.name || '')
+        .filter((v: string) => String(v).trim() !== '')
+    : [];
+  if (members.length > 0) return members.join(', ');
+  return '';
+}
+
 /**
  * KakaoForge Bot - KakaoTalk bot framework.
  *
@@ -152,7 +180,7 @@ export class KakaoForgeClient extends EventEmitter {
   _carriage: CarriageClient | null;
   _brewery: BreweryClient | null;
 
-  _messageHandler: ((chat: ChatModule, msg: MessageEvent) => void) | null;
+  _messageHandler: ((msg: MessageEvent, chat: ChatModule) => void) | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _breweryEventHandlers: Map<string, (event: BreweryEvent) => void>;
   _chatRooms: Map<string, any>;
@@ -610,19 +638,38 @@ export class KakaoForgeClient extends EventEmitter {
    */
   _emitMessage(data: any) {
     const chatLog = data.chatLog || data;
-    const msg = {
-      chatId: data.chatId || chatLog.chatId || 0,
-      sender: chatLog.authorId || chatLog.senderId || chatLog.userId || 0,
-      text: chatLog.message || chatLog.msg || chatLog.text || '',
-      type: chatLog.type || chatLog.msgType || 1,
-      logId: chatLog.logId || chatLog.msgId || 0,
+    const roomId = data.chatId || chatLog.chatId || 0;
+    const senderId = chatLog.authorId || chatLog.senderId || chatLog.userId || 0;
+    const text = chatLog.message || chatLog.msg || chatLog.text || '';
+    const type = chatLog.type || chatLog.msgType || 1;
+    const logId = chatLog.logId || chatLog.msgId || 0;
+    const senderName =
+      chatLog.authorName ||
+      chatLog.authorNickname ||
+      chatLog.nickName ||
+      chatLog.nickname ||
+      chatLog.name ||
+      '';
+
+    const roomInfo = this._chatRooms.get(String(roomId)) || {};
+    const roomName = roomInfo.roomName || roomInfo.title || '';
+
+    const msg: MessageEvent = {
+      msg: { id: logId, text, type, logId },
+      sender: { id: senderId, name: senderName },
+      room: { id: roomId, name: roomName },
       raw: data,
+      chatId: roomId,
+      senderId,
+      text,
+      type,
+      logId,
     };
 
     if (this._messageHandler) {
-      this._messageHandler(this.chat, msg);
+      this._messageHandler(msg, this.chat);
     }
-    this.emit('message', this.chat, msg);
+    this.emit('message', msg, this.chat);
   }
 
   /**
@@ -673,7 +720,7 @@ export class KakaoForgeClient extends EventEmitter {
    * Register a message handler.
    * handler(msg) where msg = { chatId, sender, text, type, logId, raw }
    */
-  onMessage(handler: (chat: ChatModule, msg: MessageEvent) => void) {
+  onMessage(handler: (msg: MessageEvent, chat: ChatModule) => void) {
     this._messageHandler = handler;
   }
 
@@ -829,6 +876,16 @@ export class KakaoForgeClient extends EventEmitter {
         lastLogId = chat.lastMessageId || chat.lastSeenLogId || 0;
       }
 
+      const roomName = resolveRoomName(chat);
+      const prev = this._chatRooms.get(key) || {};
+      this._chatRooms.set(key, {
+        ...prev,
+        lastLogId,
+        title: chat.title || prev.title || '',
+        roomName: roomName || prev.roomName || '',
+        displayMembers: chat.displayMembers || prev.displayMembers,
+      });
+
       this.watchChat(chatId, lastLogId);
       count += 1;
     }
@@ -896,7 +953,23 @@ export class KakaoForgeClient extends EventEmitter {
    */
   async getChatRooms() {
     if (!this._brewery) throw new Error('Brewery not connected');
-    return await this._brewery.getChatRooms();
+    const result = await this._brewery.getChatRooms();
+    const chats = result.chats || [];
+    for (const chat of chats) {
+      if (!chat || !chat.chatId) continue;
+      const key = String(chat.chatId);
+      const prev = this._chatRooms.get(key) || {};
+      const roomName = resolveRoomName(chat);
+      this._chatRooms.set(key, {
+        ...prev,
+        title: chat.title || prev.title || '',
+        roomName: roomName || prev.roomName || '',
+        displayMembers: chat.displayMembers || prev.displayMembers,
+        lastMessageId: chat.lastMessageId || prev.lastMessageId,
+        lastSeenLogId: chat.lastSeenLogId || prev.lastSeenLogId,
+      });
+    }
+    return result;
   }
 
   // ─── Message Sending ────────────────────────────────────────────

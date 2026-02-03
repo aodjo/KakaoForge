@@ -81,8 +81,8 @@ function runBot(bot) {
   console.log(`\n[${mode}] 실시간 이벤트 수신 중`);
 
   // 메시지 핸들러
-  bot.onMessage((msg) => {
-    console.log(`[MSG] chatId=${msg.chatId} sender=${msg.sender}: ${msg.text}`);
+  bot.onMessage((chat) => {
+    console.log(`[MSG] chatId=${chat.room.id} sender=${chat.sender.id}: ${chat.msg.text}`);
   });
 
   // EventEmitter 이벤트 핸들러
