@@ -204,6 +204,18 @@ function buildDeviceId(deviceUuid) {
 }
 
 /**
+ * Build legacy device id (SHA-1) from device UUID.
+ * KakaoTalk falls back to SHA when d_id is not stored.
+ */
+function buildLegacyDeviceId(deviceUuid) {
+  if (!deviceUuid) {
+    throw new Error('deviceUuid is required to build legacy deviceId');
+  }
+  const seed = `dkljleskljfeisflssljeif ${deviceUuid}`;
+  return crypto.createHash('sha1').update(seed, 'utf-8').digest('hex');
+}
+
+/**
  * Build headers for QR login authorization endpoints (main device).
  */
 function buildQrAuthHeaders({
@@ -424,6 +436,7 @@ async function refreshOAuthToken({
   const candidates = Array.from(new Set([
     deviceUuid,
     buildDeviceId(deviceUuid),
+    buildLegacyDeviceId(deviceUuid),
   ].filter(Boolean)));
 
   const jsonData = {
@@ -940,6 +953,7 @@ export {
   qrLogin,
   buildAuthorizationHeader,
   buildDeviceId,
+  buildLegacyDeviceId,
   buildQrAuthHeaders,
   generateQrMacResponse,
   extractQrId,
