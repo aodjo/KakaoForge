@@ -509,7 +509,7 @@ export class KakaoForgeClient extends EventEmitter {
       this._booking.disconnect();
     }
 
-    console.log(`[+] CHECKIN response:`, JSON.stringify(checkinResult, null, 2));
+    console.log(`[+] CHECKIN ok`);
 
     if (!checkinResult.host || !checkinResult.port) {
       throw new Error('CHECKIN failed: no host/port received');
