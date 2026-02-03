@@ -5,6 +5,7 @@ import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
+import { CalendarClient } from './net/calendar-client';
 import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 
@@ -81,7 +82,13 @@ export type LocationPayload = {
 
 export type SchedulePayload = {
   eventAt: number | Date;
+  endAt?: number | Date;
   title: string;
+  location?: string | Record<string, any>;
+  allDay?: boolean;
+  members?: Array<number | string>;
+  timeZone?: string;
+  referer?: string;
   postId?: number | string;
   scheduleId?: number | string;
   subtype?: number;
@@ -119,6 +126,7 @@ export type KakaoForgeConfig = {
   memberLookupTimeoutMs?: number;
   pingIntervalMs?: number;
   socketKeepAliveMs?: number;
+  timeZone?: string;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -232,6 +240,74 @@ function toUnixSeconds(value?: number | Date) {
   const num = typeof value === 'number' ? value : parseInt(value, 10);
   if (!Number.isFinite(num)) return undefined;
   return num > 1e12 ? Math.floor(num / 1000) : Math.floor(num);
+}
+
+function toDate(value?: number | Date) {
+  if (value === undefined || value === null) return null;
+  if (value instanceof Date) return value;
+  const num = typeof value === 'number' ? value : parseInt(value, 10);
+  if (!Number.isFinite(num)) return null;
+  return num > 1e12 ? new Date(num) : new Date(num * 1000);
+}
+
+function formatCalendarDate(date: Date) {
+  const iso = date.toISOString();
+  return iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function resolveTimeZone(fallback = 'Asia/Seoul') {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) return tz;
+  } catch {
+    // ignore
+  }
+  return fallback;
+}
+
+function extractShareMessageData(body: any) {
+  if (!body) return null;
+  const data = body.data ?? body.shareMessage ?? body;
+  if (!data) return null;
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data);
+    } catch {
+      return data;
+    }
+  }
+  return data;
+}
+
+function extractEventId(body: any) {
+  const eId = body?.eId || body?.eventId || body?.data?.eId || body?.data?.eventId || body?.result?.eId;
+  if (eId === undefined || eId === null) return '';
+  return String(eId);
+}
+
+function ensureScheduleAttachment(base: any, fallback: any) {
+  const result: any = typeof base === 'object' && base ? { ...base } : {};
+  if (result.eventAt === undefined && fallback.eventAt !== undefined) result.eventAt = fallback.eventAt;
+  if (!result.title && fallback.title) result.title = fallback.title;
+  if (result.subtype === undefined && fallback.subtype !== undefined) result.subtype = fallback.subtype;
+  if (result.alarmAt === undefined && fallback.alarmAt !== undefined) result.alarmAt = fallback.alarmAt;
+  if (!result.postId && !result.scheduleId) {
+    if (fallback.postId !== undefined) result.postId = fallback.postId;
+    if (fallback.scheduleId !== undefined) result.scheduleId = fallback.scheduleId;
+  }
+  return result;
+}
+
+function assertCalendarOk(res: any, label: string) {
+  const statusCode = res?.status;
+  if (typeof statusCode === 'number' && statusCode >= 400) {
+    throw new Error(`${label} HTTP ${statusCode}`);
+  }
+  const body = res?.body;
+  if (body && typeof body === 'object' && typeof body.status === 'number' && body.status !== 0) {
+    const message = body.message ? ` (${body.message})` : '';
+    throw new Error(`${label} status=${body.status}${message}`);
+  }
 }
 
 function buildExtra(attachment?: AttachmentInput, extra?: string) {
@@ -355,6 +431,7 @@ export class KakaoForgeClient extends EventEmitter {
   lang: string;
   mccmnc: string;
   ntype: number;
+  timeZone: string;
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
@@ -370,6 +447,7 @@ export class KakaoForgeClient extends EventEmitter {
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
+  _calendar: CalendarClient | null;
   _messageHandler: MessageHandler | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _locoAutoConnectAttempted: boolean;
@@ -398,6 +476,7 @@ export class KakaoForgeClient extends EventEmitter {
     this.ntype = typeof config.ntype === 'number'
       ? config.ntype
       : (typeof config.networkType === 'number' ? config.networkType : 0);
+    this.timeZone = config.timeZone || resolveTimeZone();
 
     // Sub-device mode only: always connect as secondary device
     this.useSub = true;
@@ -434,6 +513,7 @@ export class KakaoForgeClient extends EventEmitter {
     // LOCO clients
     this._booking = null;
     this._carriage = null;
+    this._calendar = null;
 
     this._messageHandler = null;
     this._pushHandlers = new Map();
@@ -782,7 +862,6 @@ export class KakaoForgeClient extends EventEmitter {
           console.log(`[*] Ticket CHECKIN -> ${host}:${port}`);
           await ticket.connect(host, port);
           const res = await ticket.checkin(opts);
-          console.log(`[+] Ticket CHECKIN response: status=${res.status}`);
           if (res.host && res.port) {
             return res;
           }
@@ -1401,20 +1480,130 @@ export class KakaoForgeClient extends EventEmitter {
 
   async sendSchedule(chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
     const normalized = normalizeScheduleAttachment(schedule);
-    if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
-      const hasId = normalized.postId || normalized.scheduleId;
-      if (!hasId) {
-        throw new Error('scheduleId 또는 postId가 필요합니다. 카톡에서 일정 생성 후 attachment를 전달하세요.');
-      }
-    }
     const fallbackText = schedule && typeof schedule === 'object'
       ? ((schedule as SchedulePayload).title || '')
       : '';
+
+    if (typeof normalized === 'string') {
+      return this._sendWithAttachment(
+        chatId,
+        MessageType.Schedule,
+        opts.text || fallbackText || '',
+        normalized,
+        opts,
+        'schedule'
+      );
+    }
+
+    if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
+      const hasId = normalized.postId || normalized.scheduleId;
+      if (hasId) {
+        return this._sendWithAttachment(
+          chatId,
+          MessageType.Schedule,
+          opts.text || fallbackText || '',
+          normalized,
+          opts,
+          'schedule'
+        );
+      }
+    }
+
+    if (!schedule || typeof schedule !== 'object') {
+      throw new Error('일정 전송에는 일정 정보가 필요합니다.');
+    }
+
+    const payload = schedule as SchedulePayload;
+    if (payload.eventAt === undefined || payload.eventAt === null) {
+      throw new Error('일정 전송에는 eventAt이 필요합니다.');
+    }
+    if (!payload.title) {
+      throw new Error('일정 전송에는 title이 필요합니다.');
+    }
+
+    const eventAtDate = toDate(payload.eventAt);
+    if (!eventAtDate) {
+      throw new Error('일정 전송: eventAt 형식이 올바르지 않습니다.');
+    }
+    const endAtDate = payload.endAt ? toDate(payload.endAt) : new Date(eventAtDate.getTime() + 60 * 60 * 1000);
+    if (!endAtDate) {
+      throw new Error('일정 전송: endAt 형식이 올바르지 않습니다.');
+    }
+
+    const chatIdNum = safeNumber(chatId, 0);
+    if (!chatIdNum) {
+      throw new Error('일정 전송: chatId가 필요합니다.');
+    }
+
+    const calendar = this._getCalendarClient();
+    const eventAtStr = formatCalendarDate(eventAtDate);
+    const endAtStr = formatCalendarDate(endAtDate);
+    const members = uniqueNumbers(payload.members);
+    if (members.length === 0 && this.userId) members.push(this.userId);
+    const timeZone = payload.timeZone || this.timeZone || resolveTimeZone();
+    const referer = payload.referer || 'detail';
+
+    const addEvent: any = {
+      startAt: eventAtStr,
+      endAt: endAtStr,
+      subject: payload.title,
+      members,
+      allDay: !!payload.allDay,
+      chatId: chatIdNum,
+      timeZone,
+      attendOn: true,
+    };
+
+    if (payload.location) {
+      addEvent.location = typeof payload.location === 'string'
+        ? { name: payload.location }
+        : payload.location;
+    }
+
+    const alarmAtDate = payload.alarmAt ? toDate(payload.alarmAt) : null;
+    const eventAtSec = Math.floor(eventAtDate.getTime() / 1000);
+    const alarmAtSec = alarmAtDate ? Math.floor(alarmAtDate.getTime() / 1000) : undefined;
+    if (alarmAtSec !== undefined && alarmAtSec <= eventAtSec) {
+      const diffMin = Math.max(0, Math.round((eventAtSec - alarmAtSec) / 60));
+      addEvent.alarmMin = [diffMin];
+    }
+
+    const createRes = await calendar.createEvent(addEvent, { referer });
+    assertCalendarOk(createRes, '일정 생성');
+    const eId = extractEventId(createRes?.body);
+    if (!eId) {
+      throw new Error('일정 생성 실패: eId 없음');
+    }
+
+    const connectRes = await calendar.connectEvent(eId, chatIdNum, referer);
+    assertCalendarOk(connectRes, '일정 연결');
+
+    const shareRes = await calendar.shareMessage(eId, referer);
+    assertCalendarOk(shareRes, '일정 공유');
+    let attachment = extractShareMessageData(shareRes?.body);
+
+    const scheduleIdCandidate = parseInt(String(eId).split('_')[0], 10);
+    const scheduleId = Number.isFinite(scheduleIdCandidate) ? scheduleIdCandidate : undefined;
+    const postId = Number.isFinite(scheduleIdCandidate) ? undefined : eId;
+
+    attachment = ensureScheduleAttachment(attachment, {
+      eventAt: eventAtSec,
+      alarmAt: alarmAtSec,
+      title: payload.title,
+      subtype: payload.subtype ?? 1,
+      scheduleId,
+      postId,
+    });
+
+    if (payload.extra && typeof payload.extra === 'object') {
+      attachment = { ...attachment, ...payload.extra };
+    }
+
     return this._sendWithAttachment(
       chatId,
       MessageType.Schedule,
-      opts.text || fallbackText || '',
-      normalized,
+      opts.text || payload.title || '',
+      attachment,
       opts,
       'schedule'
     );
@@ -1440,6 +1629,22 @@ export class KakaoForgeClient extends EventEmitter {
 
     const { text: _text, ...sendOpts } = opts;
     return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Link, extra });
+  }
+
+  _getCalendarClient() {
+    if (this._calendar) return this._calendar;
+    if (!this.oauthToken || !this.deviceUuid) {
+      throw new Error('Calendar API requires oauthToken/deviceUuid');
+    }
+    this._calendar = new CalendarClient({
+      oauthToken: this.oauthToken,
+      deviceUuid: this.deviceUuid,
+      appVer: this.appVer,
+      lang: this.lang,
+      os: this.os,
+      timeZone: this.timeZone,
+    });
+    return this._calendar;
   }
 
   async request(method, body = {}) {

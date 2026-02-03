@@ -120,7 +120,6 @@ export class BookingClient extends EventEmitter {
     if (mccmnc) body.MCCMNC = mccmnc;
 
     const res = await this.request('CHECKIN', body);
-    console.log(`[DBG] CHECKIN raw response: status=${res.status}, body=`, JSON.stringify(res.body));
     return {
       host: res.body.host || '',
       host6: res.body.host6 || '',
