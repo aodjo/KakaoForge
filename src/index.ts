@@ -190,6 +190,7 @@ export class KakaoForgeClient extends EventEmitter {
   _syncChatIds: Set<string>;
   _autoWatchTimer: NodeJS.Timeout | null;
   _autoWatchInterval: number;
+  _locoAutoConnectAttempted: boolean;
 
   constructor(config: KakaoForgeConfig = {}) {
     super();
@@ -231,6 +232,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._syncChatIds = new Set(); // chatIds to poll
     this._autoWatchTimer = null;
     this._autoWatchInterval = config.autoWatchInterval || 60000; // 60s default
+    this._locoAutoConnectAttempted = false;
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
@@ -1008,6 +1010,19 @@ export class KakaoForgeClient extends EventEmitter {
       scope: typeof opts.scope === 'number' ? opts.scope : 1,
       silence: opts.silence ?? opts.isSilence ?? false,
     };
+
+    // Auto-connect LOCO once if we need to send but aren't connected
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        // Continue to Brewery fallback, but keep the original error for context
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
 
     // Try LOCO first (if connected)
     if (this._carriage) {
