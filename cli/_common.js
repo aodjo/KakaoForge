@@ -88,6 +88,9 @@ function runBot(bot) {
   console.log('  send <chatId> <메시지>   - 메시지 전송');
   console.log('  watch <chatId>           - 채팅방 메시지 폴링 시작');
   console.log('  unwatch <chatId>         - 채팅방 폴링 중지');
+  console.log('  watchall                 - watch all chats (from lastMessageId)');
+  console.log('  autowatch [intervalMs]   - auto watch all chats (refresh list)');
+  console.log('  unwatchall               - stop auto watch + clear watch list');
   console.log('  sync <chatId> [count]    - 채팅방 메시지 한번 동기화');
   console.log('  chats                    - 채팅 탭 설정 조회');
   console.log('  watching                 - 폴링 중인 채팅방 목록');
@@ -143,21 +146,39 @@ function runBot(bot) {
     } else if (trimmed.startsWith('watch ')) {
       const chatId = trimmed.substring(6).trim();
       if (!chatId) {
-        console.log('사용법: watch <chatId>');
+        console.log('usage: watch <chatId>');
       } else {
         bot.watchChat(chatId);
         if (!bot._syncTimer) {
           bot.startSync();
         }
-        console.log(`[+] 채팅방 ${chatId} 폴링 시작`);
+        console.log(`[+] watching chat ${chatId}`);
       }
+    } else if (trimmed === 'watchall') {
+      try {
+        const added = await bot.watchAllChats();
+        if (!bot._syncTimer) {
+          bot.startSync();
+        }
+        console.log(`[+] watchall: ${added} chats`);
+      } catch (err) {
+        console.error('[!] watchall failed:', err.message);
+      }
+    } else if (trimmed.startsWith('autowatch')) {
+      const parts = trimmed.split(/\s+/);
+      const interval = parseInt(parts[1]) || undefined;
+      bot.startAutoWatchAll({ intervalMs: interval });
+    } else if (trimmed === 'unwatchall') {
+      bot.stopAutoWatchAll();
+      bot.unwatchAllChats();
+      console.log('[-] watch list cleared');
     } else if (trimmed.startsWith('unwatch ')) {
       const chatId = trimmed.substring(8).trim();
       if (!chatId) {
-        console.log('사용법: unwatch <chatId>');
+        console.log('usage: unwatch <chatId>');
       } else {
         bot.unwatchChat(chatId);
-        console.log(`[-] 채팅방 ${chatId} 폴링 중지`);
+        console.log(`[-] stopped watching chat ${chatId}`);
       }
     } else if (trimmed.startsWith('sync ')) {
       const parts = trimmed.substring(5).trim().split(/\s+/);

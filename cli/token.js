@@ -19,27 +19,31 @@ function parseArgs() {
       case '--uuid': case '-u':        opts.deviceUuid = args[++i]; break;
       case '--debug': case '-d':       opts.debug = true; break;
       case '--watch': case '-w':       opts.watchIds.push(args[++i]); break;
+      case '--watch-all':           opts.watchAll = true; break;
+      case '--autowatch':           opts.autoWatchInterval = parseInt(args[++i]); break;
       case '--sync-interval':          opts.syncInterval = parseInt(args[++i]); break;
       case '--transport':             opts.transport = (args[++i] || '').toLowerCase(); break;
       case '--loco':                  opts.transport = 'loco'; break;
       case '--both':                  opts.transport = 'both'; break;
       case '--brewery':               opts.transport = 'brewery'; break;
       case '--help': case '-h':
-        console.log(`사용법: node cli/token.js [옵션]
+        console.log(`Usage: node cli/token.js [options]
 
-옵션:
-  -i, --user-id <id>      카카오 유저 ID (숫자)
-  -t, --token <token>     OAuth 액세스 토큰
-  -u, --uuid <uuid>       디바이스 UUID
-  -d, --debug             디버그 모드 (모든 이벤트 로깅)
-  -w, --watch <chatId>    채팅방 메시지 폴링 (여러번 사용 가능)
-  --sync-interval <ms>    폴링 간격 (기본: 3000ms)
-  -h, --help              도움말
+Options:
+  -i, --user-id <id>      Kakao user id (number)
+  -t, --token <token>     OAuth access token
+  -u, --uuid <uuid>       Device UUID
+  -d, --debug             Debug mode (log all events)
+  -w, --watch <chatId>    Watch a chat (repeatable)
+  --watch-all             Watch all chats (from lastMessageId)
+  --autowatch <ms>        Auto watch all chats (refresh list)
+  --sync-interval <ms>    Sync interval (default: 3000ms)
+  -h, --help              Show help
 
-옵션 미지정 시 auth.json에서 저장된 토큰을 로드합니다.
-auth.json은 cli/qr.js 로그인 시 자동 생성됩니다.
+If no options are provided, auth.json is used.
+auth.json is created by cli/qr.js.
 
-예시:
+Examples:
   node cli/token.js -w 12345 -w 67890 --sync-interval 5000`);
         console.log('Transport: --transport <brewery|loco|both> (default: brewery), --loco, --both');
         process.exit(0);
@@ -95,6 +99,18 @@ async function main() {
     }
 
     // Auto-watch chat rooms if specified via CLI
+    if (opts.watchAll) {
+      try {
+        await bot.watchAllChats();
+        bot.startSync();
+      } catch (err) {
+        console.error('[!] watch-all failed:', err.message);
+      }
+    }
+    if (opts.autoWatchInterval) {
+      bot.startAutoWatchAll({ intervalMs: opts.autoWatchInterval });
+    }
+
     if (opts.watchIds.length > 0) {
       for (const chatId of opts.watchIds) {
         bot.watchChat(chatId);

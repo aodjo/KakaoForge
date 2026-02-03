@@ -70,6 +70,8 @@ class KakaoBot extends EventEmitter {
     this._syncTimer = null;
     this._syncInterval = config.syncInterval || 3000; // 3s default
     this._syncChatIds = new Set(); // chatIds to poll
+    this._autoWatchTimer = null;
+    this._autoWatchInterval = config.autoWatchInterval || 60000; // 60s default
   }
 
   _nextClientMsgId() {
@@ -651,6 +653,82 @@ class KakaoBot extends EventEmitter {
     if (this._syncTimer) {
       clearInterval(this._syncTimer);
       this._syncTimer = null;
+    }
+  }
+
+  /**
+   * Watch all chat rooms from the chat list.
+   * By default, starts from each chat's lastMessageId to avoid backfill.
+   *
+   * @param {Object} [opts]
+   * @param {boolean} [opts.includeHistory=false] - Start from logId=0 for all
+   * @param {boolean} [opts.forceUpdate=false] - Override existing watch cursors
+   * @returns {Promise<number>} number of chats added/updated
+   */
+  async watchAllChats({ includeHistory = false, forceUpdate = false } = {}) {
+    if (!this._brewery) throw new Error('Brewery not connected');
+    const result = await this.getChatRooms();
+    const chats = result.chats || [];
+    let count = 0;
+
+    for (const chat of chats) {
+      const chatId = chat.chatId;
+      if (!chatId) continue;
+      const key = String(chatId);
+      const already = this._syncChatIds.has(key);
+      if (already && !forceUpdate) continue;
+
+      let lastLogId = 0;
+      if (!includeHistory) {
+        lastLogId = chat.lastMessageId || chat.lastSeenLogId || 0;
+      }
+
+      this.watchChat(chatId, lastLogId);
+      count += 1;
+    }
+
+    return count;
+  }
+
+  /**
+   * Clear all watched chats.
+   */
+  unwatchAllChats() {
+    this._syncChatIds.clear();
+    this._chatRooms.clear();
+  }
+
+  /**
+   * Periodically refresh the chat list and watch all chats.
+   * Useful for auto-detecting new incoming messages across all rooms.
+   *
+   * @param {Object} [opts]
+   * @param {number} [opts.intervalMs] - refresh interval
+   */
+  startAutoWatchAll({ intervalMs } = {}) {
+    this.stopAutoWatchAll();
+    const interval = intervalMs || this._autoWatchInterval;
+
+    const tick = async () => {
+      try {
+        await this.watchAllChats({ includeHistory: false, forceUpdate: false });
+        if (!this._syncTimer) this.startSync();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] auto watch error:', err.message);
+        }
+      }
+    };
+
+    tick();
+    this._autoWatchTimer = setInterval(tick, interval);
+    console.log(`[+] Auto watch started (interval=${interval}ms)`);
+  }
+
+  stopAutoWatchAll() {
+    if (this._autoWatchTimer) {
+      clearInterval(this._autoWatchTimer);
+      this._autoWatchTimer = null;
     }
   }
 
