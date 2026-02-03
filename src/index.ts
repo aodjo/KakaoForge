@@ -493,7 +493,7 @@ export class KakaoForgeClient extends EventEmitter {
       this.hasAccount = '';
     }
     this.adid = config.adid || this.deviceUuid || '';
-    this.dtype = config.dtype !== undefined && config.dtype !== null ? String(config.dtype) : '1';
+    this.dtype = config.dtype !== undefined && config.dtype !== null ? String(config.dtype) : '2';
     this.deviceId = config.deviceId || (this.deviceUuid ? buildDeviceId(this.deviceUuid) : '');
 
     // Sub-device mode only: always connect as secondary device
@@ -1268,6 +1268,12 @@ export class KakaoForgeClient extends EventEmitter {
     return map.get(String(userId)) || '';
   }
 
+  _getCachedMemberIds(chatId: number | string) {
+    const map = this._memberNames.get(String(chatId));
+    if (!map) return [];
+    return uniqueNumbers([...map.keys()].map((id) => Number(id)));
+  }
+
   _extractMemberName(member: any) {
     return (
       member?.nickName ||
@@ -1286,9 +1292,7 @@ export class KakaoForgeClient extends EventEmitter {
       const userId = safeNumber(mem?.userId || mem?.id || mem?.memberId || mem?.user_id, 0);
       if (!userId) continue;
       const name = this._extractMemberName(mem);
-      if (name) {
-        map.set(String(userId), String(name));
-      }
+      map.set(String(userId), String(name || ''));
     }
     if (map.size > 0) {
       this._memberNames.set(key, map);
@@ -1326,6 +1330,43 @@ export class KakaoForgeClient extends EventEmitter {
 
     this._memberFetchInFlight.set(key, task);
     return task;
+  }
+
+  async _resolveChatMembers(chatId: number) {
+    const key = String(chatId);
+    const now = Date.now();
+    const cached = this._getCachedMemberIds(chatId);
+    if (cached.length > 0 && !this._shouldRefreshMembers(key, now)) {
+      return cached;
+    }
+    if (!this._carriage) return cached;
+
+    const ids = new Set<number>(cached);
+    let token = 0;
+    let pages = 0;
+    while (pages < 30) {
+      const res = await this._carriage.memList({ chatId, token, excludeMe: false });
+      const body = res?.body || {};
+      const members = body.members || body.memberList || body.memList || [];
+      if (Array.isArray(members) && members.length > 0) {
+        for (const mem of members) {
+          const userId = safeNumber(mem?.userId || mem?.id || mem?.memberId || mem?.user_id, 0);
+          if (userId) ids.add(userId);
+        }
+        this._cacheMembers(chatId, members);
+      }
+      const nextToken = safeNumber(
+        body.token || body.nextToken || body.memberToken || 0,
+        0
+      );
+      if (!nextToken || nextToken === token) break;
+      token = nextToken;
+      pages += 1;
+    }
+    if (ids.size > 0) {
+      this._touchMemberCache(chatId);
+    }
+    return [...ids];
   }
 
 
@@ -1556,8 +1597,13 @@ export class KakaoForgeClient extends EventEmitter {
     const calendar = this._getCalendarClient();
     const eventAtStr = formatCalendarDate(eventAtDate);
     const endAtStr = formatCalendarDate(endAtDate);
-    const members = uniqueNumbers(payload.members);
-    if (members.length === 0 && this.userId) members.push(this.userId);
+    let members = uniqueNumbers(payload.members);
+    if (members.length === 0) {
+      members = uniqueNumbers(await this._resolveChatMembers(chatIdNum));
+    }
+    if (this.userId) {
+      members = uniqueNumbers([...members, this.userId]);
+    }
     const timeZone = payload.timeZone || this.timeZone || resolveTimeZone();
     const referer = payload.referer || 'detail';
 

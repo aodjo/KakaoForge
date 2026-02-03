@@ -53,7 +53,7 @@ export class CalendarClient {
       this.hasAccount = '';
     }
     this.adid = opts.adid || opts.deviceUuid || '';
-    this.dtype = opts.dtype !== undefined && opts.dtype !== null ? String(opts.dtype) : '1';
+    this.dtype = opts.dtype !== undefined && opts.dtype !== null ? String(opts.dtype) : '2';
   }
 
   _headers(extra: Record<string, string> = {}) {
