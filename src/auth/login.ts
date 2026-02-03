@@ -421,39 +421,86 @@ async function refreshOAuthToken({
     throw new Error('accessToken is required for token refresh');
   }
 
-  const deviceId = buildDeviceId(deviceUuid);
+  const candidates = Array.from(new Set([
+    deviceUuid,
+    buildDeviceId(deviceUuid),
+  ].filter(Boolean)));
+
   const jsonData = {
     access_token: accessToken,
     refresh_token: refreshToken,
     grant_type: 'refresh_token',
   };
 
-  const headers = {
-    'Authorization': buildAuthorizationHeader(accessToken, deviceId),
-    'User-Agent': buildUserAgent(appVer),
-    'A': buildAHeader(appVer, lang),
-    'Accept-Language': lang,
-    'C': crypto.randomUUID(),
-    'Connection': 'Close',
+  const tryJson = async (authDevice: string) => {
+    const headers = {
+      'Authorization': buildAuthorizationHeader(accessToken, authDevice),
+      'User-Agent': buildUserAgent(appVer),
+      'A': buildAHeader(appVer, lang),
+      'Accept-Language': lang,
+      'C': crypto.randomUUID(),
+      'Connection': 'Close',
+    };
+    return await httpsPostJson(
+      KATALK_HOST,
+      '/android/account/oauth2_token.json',
+      jsonData,
+      headers,
+    );
   };
 
-  const res = await httpsPostJson(
-    KATALK_HOST,
-    '/android/account/oauth2_token.json',
-    jsonData,
-    headers,
-  );
+  const tryForm = async (authDevice: string) => {
+    const headers = {
+      'Authorization': buildAuthorizationHeader(accessToken, authDevice),
+      'User-Agent': buildUserAgent(appVer),
+      'A': buildAHeader(appVer, lang),
+      'Accept-Language': lang,
+      'C': crypto.randomUUID(),
+      'Connection': 'Close',
+      'X-VC': generateXVCHeader(deviceUuid, ''),
+    };
+    const formData = {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    };
+    return await httpsPost(
+      KATALK_HOST,
+      '/android/account/oauth2_token.json',
+      formData,
+      headers,
+    );
+  };
 
-  if (res.status !== 200 || (res.body?.status && res.body.status !== 0)) {
-    throw new Error(`Token refresh failed: ${JSON.stringify(res.body)}`);
+  let lastErr: any = null;
+  for (const authDevice of candidates) {
+    const res = await tryJson(authDevice);
+    if (res.status === 200 && (!res.body?.status || res.body.status === 0)) {
+      return {
+        accessToken: res.body.access_token,
+        refreshToken: res.body.refresh_token || refreshToken,
+        tokenType: res.body.token_type,
+        expiresIn: res.body.expires_in,
+      };
+    }
+    lastErr = res;
   }
 
-  return {
-    accessToken: res.body.access_token,
-    refreshToken: res.body.refresh_token || refreshToken,
-    tokenType: res.body.token_type,
-    expiresIn: res.body.expires_in,
-  };
+  for (const authDevice of candidates) {
+    const res = await tryForm(authDevice);
+    if (res.status === 200 && (!res.body?.status || res.body.status === 0)) {
+      return {
+        accessToken: res.body.access_token,
+        refreshToken: res.body.refresh_token || refreshToken,
+        tokenType: res.body.token_type,
+        expiresIn: res.body.expires_in,
+      };
+    }
+    lastErr = res;
+  }
+
+  const body = lastErr?.body ?? lastErr;
+  throw new Error(`Token refresh failed: ${JSON.stringify(body)}`);
 }
 
 /**
