@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /**
  * 저장된 토큰 또는 직접 지정으로 LOCO 연결
  *
