@@ -10,6 +10,9 @@ export type CalendarClientOptions = {
   lang?: string;
   os?: string;
   timeZone?: string;
+  hasAccount?: string | boolean;
+  adid?: string;
+  dtype?: string | number;
 };
 
 function buildQuery(params: Record<string, any>) {
@@ -28,6 +31,9 @@ export class CalendarClient {
   lang: string;
   os: string;
   timeZone: string;
+  hasAccount: string;
+  adid: string;
+  dtype: string;
 
   constructor(opts: CalendarClientOptions) {
     this.oauthToken = opts.oauthToken;
@@ -36,6 +42,15 @@ export class CalendarClient {
     this.lang = opts.lang || 'ko';
     this.os = opts.os || 'android';
     this.timeZone = opts.timeZone || 'Asia/Seoul';
+    if (typeof opts.hasAccount === 'boolean') {
+      this.hasAccount = opts.hasAccount ? 'true' : 'false';
+    } else if (typeof opts.hasAccount === 'string') {
+      this.hasAccount = opts.hasAccount;
+    } else {
+      this.hasAccount = '';
+    }
+    this.adid = opts.adid || opts.deviceUuid || '';
+    this.dtype = opts.dtype !== undefined && opts.dtype !== null ? String(opts.dtype) : '1';
   }
 
   _headers(extra: Record<string, string> = {}) {
@@ -46,25 +61,42 @@ export class CalendarClient {
       'talk-agent': `${this.os}/${this.appVer}`,
       'talk-language': this.lang,
       'TZ': this.timeZone,
+      'hasAccount': this.hasAccount,
+      'ADID': this.adid,
+      'dtype': this.dtype,
       ...extra,
     };
+  }
+
+  _captureHeaders(res: any) {
+    const headers = res?.headers || {};
+    const hasAccount = headers['hasaccount'] ?? headers['hasAccount'];
+    if (hasAccount !== undefined && hasAccount !== null) {
+      this.hasAccount = Array.isArray(hasAccount) ? String(hasAccount[0] ?? '') : String(hasAccount);
+    }
   }
 
   async createEvent(event: any, { referer, templateId, originalEId }: any = {}) {
     const query = buildQuery({ referer, templateId, originalEId });
     const path = `${CALENDAR_BASE}/events${query}`;
-    return await httpsPostJson(CALENDAR_HOST, path, event, this._headers());
+    const res = await httpsPostJson(CALENDAR_HOST, path, event, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 
   async connectEvent(eId: string, chatId: number | string, referer?: string) {
     const query = buildQuery({ eId, chatId, referer });
     const path = `${CALENDAR_BASE}/chat/connectEvent${query}`;
-    return await httpsPostJson(CALENDAR_HOST, path, {}, this._headers());
+    const res = await httpsPostJson(CALENDAR_HOST, path, {}, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 
   async shareMessage(eId: string, referer?: string) {
     const query = buildQuery({ eId, referer });
     const path = `${CALENDAR_BASE}/chat/shareMessage${query}`;
-    return await httpsGet(CALENDAR_HOST, path, this._headers());
+    const res = await httpsGet(CALENDAR_HOST, path, this._headers());
+    this._captureHeaders(res);
+    return res;
   }
 }

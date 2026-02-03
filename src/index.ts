@@ -127,6 +127,9 @@ export type KakaoForgeConfig = {
   pingIntervalMs?: number;
   socketKeepAliveMs?: number;
   timeZone?: string;
+  hasAccount?: string | boolean;
+  adid?: string;
+  dtype?: string | number;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -432,6 +435,9 @@ export class KakaoForgeClient extends EventEmitter {
   mccmnc: string;
   ntype: number;
   timeZone: string;
+  hasAccount: string;
+  adid: string;
+  dtype: string;
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
@@ -477,6 +483,15 @@ export class KakaoForgeClient extends EventEmitter {
       ? config.ntype
       : (typeof config.networkType === 'number' ? config.networkType : 0);
     this.timeZone = config.timeZone || resolveTimeZone();
+    if (typeof config.hasAccount === 'boolean') {
+      this.hasAccount = config.hasAccount ? 'true' : 'false';
+    } else if (typeof config.hasAccount === 'string') {
+      this.hasAccount = config.hasAccount;
+    } else {
+      this.hasAccount = '';
+    }
+    this.adid = config.adid || this.deviceUuid || '';
+    this.dtype = config.dtype !== undefined && config.dtype !== null ? String(config.dtype) : '1';
 
     // Sub-device mode only: always connect as secondary device
     this.useSub = true;
@@ -1568,17 +1583,31 @@ export class KakaoForgeClient extends EventEmitter {
       addEvent.alarmMin = [diffMin];
     }
 
-    const createRes = await calendar.createEvent(addEvent, { referer });
+    let refreshed = false;
+    const runCalendar = async (fn: () => Promise<any>) => {
+      let res = await fn();
+      if (res?.status === 401 && !refreshed) {
+        refreshed = true;
+        await this.refreshAuth();
+        if (this._calendar) {
+          this._calendar.oauthToken = this.oauthToken;
+        }
+        res = await fn();
+      }
+      return res;
+    };
+
+    const createRes = await runCalendar(() => calendar.createEvent(addEvent, { referer }));
     assertCalendarOk(createRes, '일정 생성');
     const eId = extractEventId(createRes?.body);
     if (!eId) {
       throw new Error('일정 생성 실패: eId 없음');
     }
 
-    const connectRes = await calendar.connectEvent(eId, chatIdNum, referer);
+    const connectRes = await runCalendar(() => calendar.connectEvent(eId, chatIdNum, referer));
     assertCalendarOk(connectRes, '일정 연결');
 
-    const shareRes = await calendar.shareMessage(eId, referer);
+    const shareRes = await runCalendar(() => calendar.shareMessage(eId, referer));
     assertCalendarOk(shareRes, '일정 공유');
     let attachment = extractShareMessageData(shareRes?.body);
 
@@ -1636,6 +1665,8 @@ export class KakaoForgeClient extends EventEmitter {
     if (!this.oauthToken || !this.deviceUuid) {
       throw new Error('Calendar API requires oauthToken/deviceUuid');
     }
+    const adid = this.adid || this.deviceUuid || '';
+    this.adid = adid;
     this._calendar = new CalendarClient({
       oauthToken: this.oauthToken,
       deviceUuid: this.deviceUuid,
@@ -1643,6 +1674,9 @@ export class KakaoForgeClient extends EventEmitter {
       lang: this.lang,
       os: this.os,
       timeZone: this.timeZone,
+      hasAccount: this.hasAccount,
+      adid,
+      dtype: this.dtype,
     });
     return this._calendar;
   }
@@ -1666,6 +1700,9 @@ export class KakaoForgeClient extends EventEmitter {
     this.oauthToken = result.accessToken;
     if (result.refreshToken) {
       this.refreshToken = result.refreshToken;
+    }
+    if (this._calendar) {
+      this._calendar.oauthToken = this.oauthToken;
     }
 
     console.log('[+] Token refreshed');
