@@ -6,7 +6,7 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
-import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid } from './auth/login';
+import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 
 export type TransportMode = 'loco' | null;
@@ -130,6 +130,7 @@ export type KakaoForgeConfig = {
   hasAccount?: string | boolean;
   adid?: string;
   dtype?: string | number;
+  deviceId?: string;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -438,6 +439,7 @@ export class KakaoForgeClient extends EventEmitter {
   hasAccount: string;
   adid: string;
   dtype: string;
+  deviceId: string;
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
@@ -492,6 +494,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
     this.adid = config.adid || this.deviceUuid || '';
     this.dtype = config.dtype !== undefined && config.dtype !== null ? String(config.dtype) : '1';
+    this.deviceId = config.deviceId || buildDeviceId(this.deviceUuid);
 
     // Sub-device mode only: always connect as secondary device
     this.useSub = true;
@@ -1670,6 +1673,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._calendar = new CalendarClient({
       oauthToken: this.oauthToken,
       deviceUuid: this.deviceUuid,
+      deviceId: this.deviceId,
       appVer: this.appVer,
       lang: this.lang,
       os: this.os,

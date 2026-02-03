@@ -1,4 +1,4 @@
-import { buildAHeader, buildAuthorizationHeader, buildUserAgent, httpsGet, httpsPostJson } from '../auth/login';
+import { buildAHeader, buildAuthorizationHeader, buildDeviceId, buildUserAgent, httpsGet, httpsPostJson } from '../auth/login';
 
 export const CALENDAR_HOST = 'talk-pilsner.kakao.com';
 const CALENDAR_BASE = '/calendar/talk';
@@ -6,6 +6,7 @@ const CALENDAR_BASE = '/calendar/talk';
 export type CalendarClientOptions = {
   oauthToken: string;
   deviceUuid: string;
+  deviceId?: string;
   appVer?: string;
   lang?: string;
   os?: string;
@@ -27,6 +28,7 @@ function buildQuery(params: Record<string, any>) {
 export class CalendarClient {
   oauthToken: string;
   deviceUuid: string;
+  deviceId: string;
   appVer: string;
   lang: string;
   os: string;
@@ -38,6 +40,7 @@ export class CalendarClient {
   constructor(opts: CalendarClientOptions) {
     this.oauthToken = opts.oauthToken;
     this.deviceUuid = opts.deviceUuid;
+    this.deviceId = opts.deviceId || buildDeviceId(opts.deviceUuid);
     this.appVer = opts.appVer || '26.1.2';
     this.lang = opts.lang || 'ko';
     this.os = opts.os || 'android';
@@ -55,7 +58,7 @@ export class CalendarClient {
 
   _headers(extra: Record<string, string> = {}) {
     return {
-      'Authorization': buildAuthorizationHeader(this.oauthToken, this.deviceUuid),
+      'Authorization': buildAuthorizationHeader(this.oauthToken, this.deviceId || this.deviceUuid),
       'A': buildAHeader(this.appVer, this.lang),
       'User-Agent': buildUserAgent(this.appVer),
       'talk-agent': `${this.os}/${this.appVer}`,

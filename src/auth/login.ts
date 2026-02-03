@@ -192,6 +192,18 @@ function buildAuthorizationHeader(accessToken, deviceUuid) {
 }
 
 /**
+ * Build device id (d_id) from device UUID.
+ * KakaoTalk uses SHA-256("dkljleskljfeisflssljeif {deviceUuid}").
+ */
+function buildDeviceId(deviceUuid) {
+  if (!deviceUuid) {
+    throw new Error('deviceUuid is required to build deviceId');
+  }
+  const seed = `dkljleskljfeisflssljeif ${deviceUuid}`;
+  return crypto.createHash('sha256').update(seed, 'utf-8').digest('hex');
+}
+
+/**
  * Build headers for QR login authorization endpoints (main device).
  */
 function buildQrAuthHeaders({
@@ -409,6 +421,7 @@ async function refreshOAuthToken({
     throw new Error('accessToken is required for token refresh');
   }
 
+  const deviceId = buildDeviceId(deviceUuid);
   const jsonData = {
     access_token: accessToken,
     refresh_token: refreshToken,
@@ -416,9 +429,10 @@ async function refreshOAuthToken({
   };
 
   const headers = {
-    'Authorization': buildAuthorizationHeader(accessToken, deviceUuid),
+    'Authorization': buildAuthorizationHeader(accessToken, deviceId),
     'User-Agent': buildUserAgent(appVer),
     'A': buildAHeader(appVer, lang),
+    'Accept-Language': lang,
     'C': crypto.randomUUID(),
     'Connection': 'Close',
   };
@@ -878,6 +892,7 @@ export {
   qrCancel,
   qrLogin,
   buildAuthorizationHeader,
+  buildDeviceId,
   buildQrAuthHeaders,
   generateQrMacResponse,
   extractQrId,
