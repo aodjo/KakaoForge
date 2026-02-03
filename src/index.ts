@@ -262,6 +262,21 @@ function unwrapAttachment(input: any) {
   return input;
 }
 
+function normalizePathInput(input: string) {
+  let out = (input || '').trim();
+  if (!out) return out;
+  out = out.replace(/^[`"']+/, '').replace(/[`"']+$/, '').trim();
+  out = out.replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
+  out = out.replace(/\\\\/g, '\\');
+  if (out.startsWith('file://')) {
+    out = out.replace(/^file:\/\//, '');
+    if (/^\/[A-Za-z]:\//.test(out)) {
+      out = out.slice(1);
+    }
+  }
+  return out;
+}
+
 
 
 function toUnixSeconds(value?: number | Date) {
@@ -1698,6 +1713,10 @@ export class KakaoForgeClient extends EventEmitter {
       const looksJson = trimmed.startsWith('{') || trimmed.startsWith('[');
       if (looksJson) {
         return attachment;
+      }
+      const normalizedPath = normalizePathInput(attachment);
+      if (normalizedPath && normalizedPath !== attachment) {
+        attachment = normalizedPath;
       }
       try {
         if (fs.existsSync(attachment)) {
