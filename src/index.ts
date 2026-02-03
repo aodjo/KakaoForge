@@ -9,7 +9,6 @@ import { CalendarClient } from './net/calendar-client';
 import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
-import type { MessageAttachment } from './types/attachments';
 
 export type TransportMode = 'loco' | null;
 
@@ -20,7 +19,6 @@ export type MessageEvent = {
     type: number;
     logId: number;
   };
-  attachments: MessageAttachment[];
   attachmentsRaw: any[];
   sender: {
     id: number;
@@ -225,11 +223,6 @@ function parseAttachments(raw: any): any[] {
   return [];
 }
 
-function mapMessageAttachments(rawList: any[], msgType: number): MessageAttachment[] {
-  if (!Array.isArray(rawList)) return [];
-  const type = Number.isFinite(Number(msgType)) ? Number(msgType) : MessageType.Text;
-  return rawList.map((raw) => ({ type, raw }));
-}
 
 
 function toUnixSeconds(value?: number | Date) {
@@ -1007,7 +1000,6 @@ export class KakaoForgeClient extends EventEmitter {
     const attachmentsRaw = parseAttachments(
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
-    const attachments = mapMessageAttachments(attachmentsRaw, type);
 
     if (roomId) {
       this._ensureMemberList(roomId);
@@ -1040,7 +1032,6 @@ export class KakaoForgeClient extends EventEmitter {
 
     const msg: MessageEvent = {
       message: { id: logId, text, type, logId },
-      attachments,
       attachmentsRaw,
       sender: { id: senderId, name: senderName },
       room: { id: roomId, name: roomName },
@@ -1905,7 +1896,6 @@ export { MessageType } from './types/message';
 
 export type {
   AttachmentType,
-  MessageAttachment,
 } from './types/attachments';
 export type { MessageTypeValue } from './types/message';
 export type KakaoBot = KakaoForgeClient;
