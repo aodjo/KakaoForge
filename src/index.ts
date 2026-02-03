@@ -31,6 +31,7 @@ export type MessageEvent = {
     type: number;
     logId: number;
   };
+  attachments: any[];
   sender: {
     id: number;
     name: string;
@@ -203,6 +204,24 @@ function toLong(value: any) {
 function safeNumber(value: any, fallback = 0) {
   const num = typeof value === 'number' ? value : parseInt(value, 10);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function parseAttachments(raw: any): any[] {
+  if (raw === undefined || raw === null) return [];
+  let parsed: any = raw;
+  if (typeof parsed === 'string') {
+    const trimmed = parsed.trim();
+    if (!trimmed) return [];
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return [];
+    }
+  }
+  if (!parsed) return [];
+  if (Array.isArray(parsed)) return parsed;
+  if (typeof parsed === 'object') return [parsed];
+  return [];
 }
 
 function toUnixSeconds(value?: number | Date) {
@@ -847,6 +866,9 @@ export class KakaoForgeClient extends EventEmitter {
     const text = chatLog.message || chatLog.msg || chatLog.text || '';
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
     const logId = safeNumber(chatLog.logId || chatLog.msgId || 0, 0);
+    const attachments = parseAttachments(
+      chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
+    );
 
     if (roomId) {
       this._ensureMemberList(roomId);
@@ -879,6 +901,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     const msg: MessageEvent = {
       message: { id: logId, text, type, logId },
+      attachments,
       sender: { id: senderId, name: senderName },
       room: { id: roomId, name: roomName },
       raw: data,
