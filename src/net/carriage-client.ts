@@ -35,10 +35,13 @@ export class CarriageClient extends EventEmitter {
   /**
    * Connect to the Carriage server and perform V2SL handshake.
    */
-  connect(host: string, port: number, timeout = 10000): Promise<void> {
+  connect(host: string, port: number, timeout = 10000, keepAliveMs = 30000): Promise<void> {
     return new Promise((resolve, reject) => {
       this._socket = new net.Socket();
       this._socket.setNoDelay(true);
+      if (keepAliveMs && keepAliveMs > 0) {
+        this._socket.setKeepAlive(true, keepAliveMs);
+      }
 
       const timer = setTimeout(() => {
         this._socket.destroy();

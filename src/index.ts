@@ -60,6 +60,8 @@ export type KakaoForgeConfig = {
   memberCacheTtlMs?: number;
   memberRefreshIntervalMs?: number;
   memberLookupTimeoutMs?: number;
+  pingIntervalMs?: number;
+  socketKeepAliveMs?: number;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -168,6 +170,8 @@ export class KakaoForgeClient extends EventEmitter {
   memberCacheTtlMs: number;
   memberRefreshIntervalMs: number;
   memberLookupTimeoutMs: number;
+  pingIntervalMs: number;
+  socketKeepAliveMs: number;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -225,6 +229,12 @@ export class KakaoForgeClient extends EventEmitter {
     this.memberLookupTimeoutMs = typeof config.memberLookupTimeoutMs === 'number'
       ? config.memberLookupTimeoutMs
       : 3000;
+    this.pingIntervalMs = typeof config.pingIntervalMs === 'number'
+      ? config.pingIntervalMs
+      : 60000;
+    this.socketKeepAliveMs = typeof config.socketKeepAliveMs === 'number'
+      ? config.socketKeepAliveMs
+      : 30000;
 
     // LOCO clients
     this._booking = null;
@@ -518,7 +528,7 @@ export class KakaoForgeClient extends EventEmitter {
       this._scheduleReconnect();
     });
 
-    await this._carriage.connect(checkinResult.host, checkinResult.port);
+    await this._carriage.connect(checkinResult.host, checkinResult.port, 10000, this.socketKeepAliveMs);
     this.emit('connected');
     console.log('[+] Connected to Carriage server (V2SL handshake done)');
 
@@ -540,7 +550,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._applyChatList(loginRes.body);
 
     // Start keepalive
-    this._carriage.startPing(60000);
+    this._carriage.startPing(this.pingIntervalMs);
     console.log('[+] Bot is ready!');
     this.emit('ready', this.chat);
     this._startMemberRefresh();
