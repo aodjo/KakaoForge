@@ -262,27 +262,13 @@ function messageTypeToAttachmentType(type: number): AttachmentType {
 }
 
 function inferAttachmentType(raw: any, msgType: number): AttachmentType {
+  const byType = messageTypeToAttachmentType(msgType);
+  if (byType !== 'unknown') return byType;
   if (raw && typeof raw === 'object') {
     const sid = raw?.P?.SID || raw?.sid || raw?.SID;
     if (raw?.CAL || raw?.cal || sid === 'talk_calendar') return 'schedule';
-    if (raw?.lat !== undefined || raw?.lng !== undefined || raw?.latitude !== undefined || raw?.longitude !== undefined) {
-      return 'location';
-    }
-    if (raw?.name && (raw?.phone || raw?.phones || raw?.email || raw?.vcard)) return 'contact';
-    if (raw?.mt) {
-      const mt = String(raw.mt).toLowerCase();
-      if (mt.startsWith('image/')) return 'photo';
-      if (mt.startsWith('video/')) return 'video';
-      if (mt.startsWith('audio/')) return 'audio';
-    }
-    if (raw?.urls || raw?.imageUrls || raw?.thumbnailUrls || raw?.urlh) return 'photo';
-    if (raw?.d || raw?.duration) {
-      return raw?.mt ? messageTypeToAttachmentType(msgType) : 'video';
-    }
-    if (raw?.name || raw?.filename) return 'file';
-    if (raw?.url || raw?.link) return 'link';
   }
-  return messageTypeToAttachmentType(msgType);
+  return 'unknown';
 }
 
 function normalizeAttachmentData(type: AttachmentType, raw: any) {
