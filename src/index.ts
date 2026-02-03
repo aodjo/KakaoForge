@@ -8,6 +8,7 @@ import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
 import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
+import type { AttachmentItem, AttachmentType } from './types/attachments';
 
 export type TransportMode = 'loco' | null;
 
@@ -66,23 +67,6 @@ export type SendOptions = {
 };
 
 export type AttachmentInput = Record<string, any> | string;
-
-export type AttachmentType =
-  | 'photo'
-  | 'video'
-  | 'audio'
-  | 'file'
-  | 'contact'
-  | 'location'
-  | 'schedule'
-  | 'link'
-  | 'unknown';
-
-export type AttachmentItem = {
-  type: AttachmentType;
-  raw: any;
-  data?: any;
-};
 
 export type AttachmentSendOptions = SendOptions & {
   text?: string;
@@ -317,6 +301,14 @@ function normalizeAttachmentData(type: AttachmentType, raw: any) {
         address: raw?.a ?? raw?.address ?? null,
         title: raw?.t ?? raw?.title ?? null,
       };
+    case 'contact':
+      return {
+        name: raw?.name ?? null,
+        phone: raw?.phone ?? null,
+        phones: raw?.phones ?? null,
+        email: raw?.email ?? null,
+        vcard: raw?.vcard ?? null,
+      };
     case 'photo':
     case 'video':
     case 'audio':
@@ -330,6 +322,12 @@ function normalizeAttachmentData(type: AttachmentType, raw: any) {
         width: raw?.w ?? raw?.width ?? null,
         height: raw?.h ?? raw?.height ?? null,
         duration: raw?.d ?? raw?.duration ?? null,
+      };
+    case 'link':
+      return {
+        url: raw?.url ?? raw?.link ?? null,
+        text: raw?.text ?? null,
+        title: raw?.title ?? null,
       };
     default:
       return raw;
@@ -2012,4 +2010,24 @@ export function createClient(config: KakaoForgeConfig = {}) {
 }
 
 export const KakaoBot = KakaoForgeClient;
+
+export type {
+  AttachmentItem,
+  AttachmentType,
+  AttachmentBase,
+  ScheduleAttachment,
+  LocationAttachment,
+  ContactAttachment,
+  PhotoAttachment,
+  VideoAttachment,
+  AudioAttachment,
+  FileAttachment,
+  LinkAttachment,
+  UnknownAttachment,
+  ScheduleAttachmentData,
+  LocationAttachmentData,
+  ContactAttachmentData,
+  MediaAttachmentData,
+  LinkAttachmentData,
+} from './types/attachments';
 export type KakaoBot = KakaoForgeClient;
