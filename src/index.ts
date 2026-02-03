@@ -1554,10 +1554,13 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   _buildUploadHeaders(opts: UploadOptions = {}) {
+    const headerA = buildAHeader(this.appVer, this.lang);
     const headers: Record<string, string> = {
-      'User-Agent': buildUserAgent(this.appVer),
-      'A': buildAHeader(this.appVer, this.lang),
+      // Kage client uses A header format for User-Agent.
+      'User-Agent': headerA,
+      'A': headerA,
       'Accept': '*/*',
+      'Accept-Language': this.lang,
     };
     const provided = opts.headers || {};
     const lowerKeys = new Set(Object.keys(provided).map((key) => key.toLowerCase()));
@@ -1574,7 +1577,8 @@ export class KakaoForgeClient extends EventEmitter {
     if (!lowerKeys.has('c')) {
       headers['C'] = crypto.randomUUID();
     }
-    if (opts.auth && this.oauthToken) {
+    const useAuth = opts.auth !== false;
+    if (useAuth && this.oauthToken) {
       const deviceId = this.deviceId || this.deviceUuid;
       if (deviceId) {
         headers['Authorization'] = buildAuthorizationHeader(this.oauthToken, deviceId);
