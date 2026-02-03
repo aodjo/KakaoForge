@@ -54,6 +54,9 @@ export type KakaoForgeConfig = {
   deviceUuid?: string;
   authPath?: string;
   autoConnect?: boolean;
+  autoReconnect?: boolean;
+  reconnectMinDelayMs?: number;
+  reconnectMaxDelayMs?: number;
   os?: string;
   appVer?: string;
   lang?: string;
@@ -109,6 +112,7 @@ type ChatListCursor = {
 
 type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
 
+
 function uniqueStrings(list) {
   if (!Array.isArray(list)) return [];
   return [...new Set(list.map((v) => String(v).trim()).filter(Boolean))];
@@ -154,6 +158,9 @@ export class KakaoForgeClient extends EventEmitter {
   refreshToken: string;
   debug: boolean;
   chat: ChatModule;
+  autoReconnect: boolean;
+  reconnectMinDelayMs: number;
+  reconnectMaxDelayMs: number;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -162,6 +169,10 @@ export class KakaoForgeClient extends EventEmitter {
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
   _chatListCursor: ChatListCursor;
+  _connectPromise: Promise<any> | null;
+  _reconnectTimer: NodeJS.Timeout | null;
+  _reconnectAttempt: number;
+  _disconnectRequested: boolean;
 
   constructor(config: KakaoForgeConfig = {}) {
     super();
@@ -185,6 +196,14 @@ export class KakaoForgeClient extends EventEmitter {
     // Debug mode: log all raw events
     this.debug = config.debug || false;
 
+    this.autoReconnect = config.autoReconnect !== false;
+    this.reconnectMinDelayMs = typeof config.reconnectMinDelayMs === 'number'
+      ? config.reconnectMinDelayMs
+      : 1000;
+    this.reconnectMaxDelayMs = typeof config.reconnectMaxDelayMs === 'number'
+      ? config.reconnectMaxDelayMs
+      : 30000;
+
     // LOCO clients
     this._booking = null;
     this._carriage = null;
@@ -194,6 +213,10 @@ export class KakaoForgeClient extends EventEmitter {
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
+    this._connectPromise = null;
+    this._reconnectTimer = null;
+    this._reconnectAttempt = 0;
+    this._disconnectRequested = false;
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
@@ -281,16 +304,65 @@ export class KakaoForgeClient extends EventEmitter {
     return await this.connect();
   }
 
+  _clearReconnectTimer() {
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+  }
+
+  _scheduleReconnect(reason?: any) {
+    if (!this.autoReconnect || this._disconnectRequested) return;
+    if (this._reconnectTimer) return;
+
+    const attempt = this._reconnectAttempt + 1;
+    this._reconnectAttempt = attempt;
+    const delay = Math.min(
+      this.reconnectMinDelayMs * Math.pow(2, attempt - 1),
+      this.reconnectMaxDelayMs
+    );
+
+    if (reason && this.debug) {
+      console.error('[DBG] reconnect reason:', reason?.message || reason);
+    }
+    console.log(`[!] Reconnecting in ${delay}ms...`);
+
+    this._reconnectTimer = setTimeout(async () => {
+      this._reconnectTimer = null;
+      try {
+        await this.connect();
+        this._reconnectAttempt = 0;
+      } catch (err) {
+        console.error('[!] Reconnect failed:', err.message);
+        this._scheduleReconnect(err);
+      }
+    }, delay);
+  }
+
   /**
    * Connect to KakaoTalk LOCO servers.
    * Requires userId, oauthToken, deviceUuid.
    */
   async connect() {
+    if (this._connectPromise) return this._connectPromise;
+    this._disconnectRequested = false;
+    this._clearReconnectTimer();
+
+    this._connectPromise = (async () => {
     if (!this.oauthToken) {
       throw new Error('No OAuth token. Call login() first or set oauthToken in constructor.');
     }
     if (!this.deviceUuid) {
       throw new Error('No deviceUuid. Use auth.json or call login() first.');
+    }
+
+    if (this._carriage) {
+      this._carriage.disconnect();
+      this._carriage = null;
+    }
+    if (this._booking) {
+      this._booking.disconnect();
+      this._booking = null;
     }
 
     // Step 1: Booking - GETCONF
@@ -379,6 +451,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._carriage.on('disconnected', () => {
       console.log('[!] Disconnected from Carriage');
       this.emit('disconnected');
+      this._scheduleReconnect();
     });
 
     await this._carriage.connect(checkinResult.host, checkinResult.port);
@@ -407,7 +480,19 @@ export class KakaoForgeClient extends EventEmitter {
     console.log('[+] Bot is ready!');
     this.emit('ready', this.chat);
 
-    return loginRes;
+      return loginRes;
+    })();
+
+    try {
+      const result = await this._connectPromise;
+      this._reconnectAttempt = 0;
+      return result;
+    } catch (err) {
+      this._scheduleReconnect(err);
+      throw err;
+    } finally {
+      this._connectPromise = null;
+    }
   }
 
   async _checkinViaTicket(hosts, ports, opts) {
@@ -465,6 +550,10 @@ export class KakaoForgeClient extends EventEmitter {
 
   onMessage(handler: MessageHandler) {
     this._messageHandler = handler;
+  }
+
+  onReady(handler: (chat: ChatModule) => void) {
+    this.on('ready', handler);
   }
 
   onPush(method: string, handler: (payload: any) => void) {
@@ -656,6 +745,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
+
   /**
    * Fetch chat room list via LOCO (LCHATLIST).
    * Returns { chats: [...] }
@@ -788,6 +878,9 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   disconnect() {
+    this._disconnectRequested = true;
+    this._clearReconnectTimer();
+    this._reconnectAttempt = 0;
     if (this._booking) this._booking.disconnect();
     if (this._carriage) this._carriage.disconnect();
     this.emit('disconnected');
