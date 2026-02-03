@@ -8,23 +8,10 @@ import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
 import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
-import type { AttachmentItem, AttachmentType } from './types/attachments';
+import { MessageType, type MessageTypeValue } from './types/message';
+import type { MessageAttachment } from './types/attachments';
 
 export type TransportMode = 'loco' | null;
-
-export const MessageType = {
-  Text: 1,
-  Photo: 2,
-  Video: 3,
-  Contact: 4,
-  Audio: 5,
-  Link: 9,
-  Schedule: 13,
-  Location: 16,
-  File: 18,
-} as const;
-
-export type MessageTypeValue = typeof MessageType[keyof typeof MessageType];
 
 export type MessageEvent = {
   message: {
@@ -33,7 +20,7 @@ export type MessageEvent = {
     type: number;
     logId: number;
   };
-  attachments: AttachmentItem[];
+  attachments: MessageAttachment[];
   attachmentsRaw: any[];
   sender: {
     id: number;
@@ -238,96 +225,12 @@ function parseAttachments(raw: any): any[] {
   return [];
 }
 
-function messageTypeToAttachmentType(type: number): AttachmentType {
-  switch (type) {
-    case MessageType.Photo:
-      return 'photo';
-    case MessageType.Video:
-      return 'video';
-    case MessageType.Audio:
-      return 'audio';
-    case MessageType.File:
-      return 'file';
-    case MessageType.Contact:
-      return 'contact';
-    case MessageType.Location:
-      return 'location';
-    case MessageType.Schedule:
-      return 'schedule';
-    case MessageType.Link:
-      return 'link';
-    default:
-      return 'unknown';
-  }
-}
-
-function inferAttachmentType(raw: any, msgType: number): AttachmentType {
-  const byType = messageTypeToAttachmentType(msgType);
-  if (byType !== 'unknown') return byType;
-  if (raw && typeof raw === 'object') {
-    const sid = raw?.P?.SID || raw?.sid || raw?.SID;
-    if (raw?.CAL || raw?.cal || sid === 'talk_calendar') return 'schedule';
-  }
-  return 'unknown';
-}
-
-function normalizeAttachmentData(type: AttachmentType, raw: any) {
-  if (!raw || typeof raw !== 'object') return raw;
-  switch (type) {
-    case 'schedule':
-      return {
-        calendar: raw?.CAL ?? raw?.cal ?? null,
-        preview: raw?.P ?? raw?.p ?? null,
-        card: raw?.C ?? raw?.c ?? null,
-      };
-    case 'location':
-      return {
-        lat: raw?.lat ?? raw?.latitude ?? null,
-        lng: raw?.lng ?? raw?.longitude ?? null,
-        address: raw?.a ?? raw?.address ?? null,
-        title: raw?.t ?? raw?.title ?? null,
-      };
-    case 'contact':
-      return {
-        name: raw?.name ?? null,
-        phone: raw?.phone ?? null,
-        phones: raw?.phones ?? null,
-        email: raw?.email ?? null,
-        vcard: raw?.vcard ?? null,
-      };
-    case 'photo':
-    case 'video':
-    case 'audio':
-    case 'file':
-      return {
-        urls: raw?.urls ?? raw?.imageUrls ?? null,
-        url: raw?.url ?? raw?.urlh ?? null,
-        name: raw?.name ?? raw?.filename ?? null,
-        size: raw?.size ?? raw?.s ?? null,
-        mime: raw?.mt ?? raw?.mime ?? null,
-        width: raw?.w ?? raw?.width ?? null,
-        height: raw?.h ?? raw?.height ?? null,
-        duration: raw?.d ?? raw?.duration ?? null,
-      };
-    case 'link':
-      return {
-        url: raw?.url ?? raw?.link ?? null,
-        text: raw?.text ?? null,
-        title: raw?.title ?? null,
-      };
-    default:
-      return raw;
-  }
-}
-
-function normalizeAttachments(rawList: any[], msgType: number): AttachmentItem[] {
+function mapMessageAttachments(rawList: any[], msgType: number): MessageAttachment[] {
   if (!Array.isArray(rawList)) return [];
-  return rawList.map((raw) => {
-    const type = inferAttachmentType(raw, msgType);
-    const data = normalizeAttachmentData(type, raw);
-    return { type, raw, data };
-  });
+  const type = Number.isFinite(Number(msgType)) ? Number(msgType) : MessageType.Text;
+  return rawList.map((raw) => ({ type, raw }));
 }
+
 
 function toUnixSeconds(value?: number | Date) {
   if (value === undefined || value === null) return undefined;
@@ -1104,7 +1007,7 @@ export class KakaoForgeClient extends EventEmitter {
     const attachmentsRaw = parseAttachments(
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
-    const attachments = normalizeAttachments(attachmentsRaw, type);
+    const attachments = mapMessageAttachments(attachmentsRaw, type);
 
     if (roomId) {
       this._ensureMemberList(roomId);
@@ -1998,24 +1901,11 @@ export function createClient(config: KakaoForgeConfig = {}) {
 export const KakaoBot = KakaoForgeClient;
 
 export { AttachmentTypes } from './types/attachments';
+export { MessageType } from './types/message';
 
 export type {
-  AttachmentItem,
   AttachmentType,
-  AttachmentBase,
-  ScheduleAttachment,
-  LocationAttachment,
-  ContactAttachment,
-  PhotoAttachment,
-  VideoAttachment,
-  AudioAttachment,
-  FileAttachment,
-  LinkAttachment,
-  UnknownAttachment,
-  ScheduleAttachmentData,
-  LocationAttachmentData,
-  ContactAttachmentData,
-  MediaAttachmentData,
-  LinkAttachmentData,
+  MessageAttachment,
 } from './types/attachments';
+export type { MessageTypeValue } from './types/message';
 export type KakaoBot = KakaoForgeClient;
