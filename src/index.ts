@@ -1639,11 +1639,13 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error(`upload response missing access_key: ${preview}`);
     }
 
+    const tokenKey = type === 'video' ? 'tk' : 'k';
     const attachment: Record<string, any> = {
-      tk: accessKey,
+      [tokenKey]: accessKey,
     };
 
     if (type === 'file') {
+      attachment.s = stat.size;
       attachment.name = opts.name || opts.filename || path.basename(filePath);
       attachment.size = stat.size;
       if (mime) {
