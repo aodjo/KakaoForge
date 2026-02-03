@@ -18,10 +18,12 @@ export const DEFAULT_QR_MODEL_NAME = 'SM-T733';
 const QR_USER_AGENT = 'okhttp/4.12.0';
 
 /**
- * Generate a random device UUID.
+ * Generate a device UUID (d_id).
+ * KakaoTalk uses a hashed device id for sub-device login.
  */
 function generateDeviceUuid() {
-  return crypto.randomBytes(32).toString('hex').substring(0, 64);
+  const base = `${crypto.randomUUID()}-${Date.now()}`;
+  return buildDeviceId(base);
 }
 
 /**
@@ -199,7 +201,11 @@ function buildDeviceId(deviceUuid) {
   if (!deviceUuid) {
     throw new Error('deviceUuid is required to build deviceId');
   }
-  const seed = `dkljleskljfeisflssljeif ${deviceUuid}`;
+  const raw = String(deviceUuid);
+  if (/^[a-f0-9]{40,64}$/i.test(raw)) {
+    return raw;
+  }
+  const seed = `dkljleskljfeisflssljeif ${raw}`;
   return crypto.createHash('sha256').update(seed, 'utf-8').digest('hex');
 }
 
