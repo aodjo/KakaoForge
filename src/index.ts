@@ -1,6 +1,7 @@
 ﻿import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
@@ -1558,6 +1559,21 @@ export class KakaoForgeClient extends EventEmitter {
       'A': buildAHeader(this.appVer, this.lang),
       'Accept': '*/*',
     };
+    const provided = opts.headers || {};
+    const lowerKeys = new Set(Object.keys(provided).map((key) => key.toLowerCase()));
+    if (!lowerKeys.has('content-transfer-encoding')) {
+      headers['Content-Transfer-Encoding'] = 'binary';
+    }
+    if (!lowerKeys.has('connection')) {
+      headers['Connection'] = 'Close';
+    }
+    if (!lowerKeys.has('device-model-name')) {
+      const modelName = this.deviceId || this.deviceUuid || 'SM-G998N';
+      headers['Device-model-name'] = modelName;
+    }
+    if (!lowerKeys.has('c')) {
+      headers['C'] = crypto.randomUUID();
+    }
     if (opts.auth && this.oauthToken) {
       const deviceId = this.deviceId || this.deviceUuid;
       if (deviceId) {
