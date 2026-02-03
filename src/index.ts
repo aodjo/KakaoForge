@@ -66,7 +66,6 @@ export type KakaoForgeConfig = {
   MCCMNC?: string;
   ntype?: number;
   networkType?: number;
-  useSub?: boolean;
   refreshToken?: string;
   debug?: boolean;
   syncInterval?: number;
@@ -176,8 +175,8 @@ export class KakaoForgeClient extends EventEmitter {
       ? config.ntype
       : (typeof config.networkType === 'number' ? config.networkType : 0);
 
-    // Sub-device mode: connects as secondary device (phone stays logged in)
-    this.useSub = config.useSub !== undefined ? config.useSub : true;
+    // Sub-device mode only: always connect as secondary device
+    this.useSub = true;
 
     // Refresh token for token renewal
     this.refreshToken = config.refreshToken || '';

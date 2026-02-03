@@ -79,7 +79,6 @@ async function main() {
     userId,
     oauthToken,
     deviceUuid,
-    useSub: true,
     debug: opts.debug || false,
     syncInterval: opts.syncInterval || 3000,
   });

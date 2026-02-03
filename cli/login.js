@@ -48,7 +48,6 @@ async function main() {
   }
 
   const bot = new KakaoBot({
-    useSub: true,
     deviceUuid: opts.deviceUuid || '',
   });
 

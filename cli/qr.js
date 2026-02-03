@@ -47,7 +47,6 @@ async function main() {
   const useBrewery = transport !== 'loco';
 
   const bot = new KakaoBot({
-    useSub: true,
     deviceUuid: opts.deviceUuid || '',
   });
 
