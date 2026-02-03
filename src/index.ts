@@ -1401,6 +1401,12 @@ export class KakaoForgeClient extends EventEmitter {
 
   async sendSchedule(chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
     const normalized = normalizeScheduleAttachment(schedule);
+    if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
+      const hasId = normalized.postId || normalized.scheduleId;
+      if (!hasId) {
+        throw new Error('scheduleId 또는 postId가 필요합니다. 카톡에서 일정 생성 후 attachment를 전달하세요.');
+      }
+    }
     const fallbackText = schedule && typeof schedule === 'object'
       ? ((schedule as SchedulePayload).title || '')
       : '';
