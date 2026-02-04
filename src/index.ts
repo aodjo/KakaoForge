@@ -2044,6 +2044,11 @@ export class KakaoForgeClient extends EventEmitter {
     if (metaTitle) return metaTitle;
 
     if (Array.isArray(chat.chatMetas)) {
+      const titleMeta = chat.chatMetas.find((meta) => meta?.type === 3);
+      if (titleMeta) {
+        const title = this._extractTitleFromMeta(titleMeta?.content ?? titleMeta);
+        if (title) return title;
+      }
       for (const meta of chat.chatMetas) {
         const title = this._extractTitleFromMeta(meta?.content);
         if (title) return title;
