@@ -2320,7 +2320,7 @@ export class KakaoForgeClient extends EventEmitter {
     const msg = await this._buildMessageEvent(data);
     if (!msg) return;
 
-    const clientType = this._resolveMemberRole(msg.room.id, this.userId, msg.room.isOpenChat);
+    const clientType = this._resolveMemberRole(msg.room.id, this.userId);
     this.type = clientType;
     this.chat.type = clientType;
 
@@ -2465,7 +2465,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
   }
-    const senderType = this._resolveMemberRole(roomIdValue, senderIdValue, flags.isOpenChat);
+    const senderType = this._resolveMemberRole(roomIdValue, senderIdValue);
     const msg: MessageEvent = {
       message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,
@@ -2816,8 +2816,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
-  _resolveMemberRole(chatId: number | string, userId: number | string, isOpenChat: boolean): MemberRole {
-    if (!isOpenChat) return '일반';
+  _resolveMemberRole(chatId: number | string, userId: number | string): MemberRole {
     const memberType = this._getCachedMemberType(chatId, userId);
     if (memberType === 1) return '방장';
     if (memberType === 4) return '부방장';
