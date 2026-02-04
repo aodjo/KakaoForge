@@ -1185,6 +1185,7 @@ export class KakaoForgeClient extends EventEmitter {
   _openChatInitInFlight: Map<string, Promise<void>>;
   _openChatInitialized: Set<string>;
   _chatInfoInFlight: Map<string, Promise<void>>;
+  _chatTitleChecked: Set<string>;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1273,6 +1274,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._openChatInitInFlight = new Map();
     this._openChatInitialized = new Set();
     this._chatInfoInFlight = new Map();
+    this._chatTitleChecked = new Set();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Map();
@@ -1896,6 +1898,18 @@ export class KakaoForgeClient extends EventEmitter {
         roomName = flags.isOpenChat
           ? (refreshed.title || roomName)
           : (refreshed.roomName || refreshed.title || roomName);
+      }
+      if (!flags.isOpenChat) {
+        const titleKey = String(roomIdValue);
+        const derived = this._buildRoomNameFromMembers(titleKey);
+        if (!this._chatTitleChecked.has(titleKey) && (!roomName || (derived && roomName === derived))) {
+          this._chatTitleChecked.add(titleKey);
+          await this._ensureChatInfo(roomIdValue);
+          const titled = this._chatRooms.get(titleKey);
+          if (titled?.title) {
+            roomName = titled.title;
+          }
+        }
       }
       if (!roomName && !flags.isOpenChat) {
         const derived = this._buildRoomNameFromMembers(String(roomIdValue));
