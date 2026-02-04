@@ -1229,6 +1229,7 @@ export class KakaoForgeClient extends EventEmitter {
   _chatTitleChecked: Set<string>;
   _openLinkInfoCache: Map<string, { name: string }>;
   _openLinkInfoInFlight: Map<string, Promise<string | null>>;
+  _openLinkSyncToken: number | string;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1320,6 +1321,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._chatTitleChecked = new Set();
     this._openLinkInfoCache = new Map();
     this._openLinkInfoInFlight = new Map();
+    this._openLinkSyncToken = 0;
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Map();
@@ -1517,6 +1519,31 @@ export class KakaoForgeClient extends EventEmitter {
 
     this._openLinkInfoInFlight.set(key, task);
     return task;
+  }
+
+  async _syncOpenLinks() {
+    if (!this._carriage) return;
+    try {
+      const res = await this._carriage.syncLink(this._openLinkSyncToken || 0);
+      const body = res?.body || {};
+      const list = body.ols || body.links || [];
+      if (Array.isArray(list)) {
+        for (const info of list) {
+          const id = normalizeIdValue(info?.li || info?.linkId || info?.id || 0);
+          const name = String(info?.ln || info?.name || info?.title || '').trim();
+          if (id && name) {
+            this._openLinkInfoCache.set(String(id), { name });
+          }
+        }
+      }
+      if (body.ltk !== undefined) {
+        this._openLinkSyncToken = normalizeIdValue(body.ltk) || this._openLinkSyncToken;
+      }
+    } catch (err) {
+      if (this.debug) {
+        console.error('[DBG] synclink failed:', err.message);
+      }
+    }
   }
 
   /**
@@ -1803,6 +1830,9 @@ export class KakaoForgeClient extends EventEmitter {
 
     this._applyChatList(loginRes.body);
 
+    // Sync open link list for open chat titles
+    await this._syncOpenLinks();
+
     // Start keepalive
     this._carriage.startPing(this.pingIntervalMs);
     console.log('[+] Bot is ready!');
@@ -1958,6 +1988,12 @@ export class KakaoForgeClient extends EventEmitter {
       const key = String(roomIdValue);
       if (!roomInfo.openLinkId) {
         this._chatRooms.set(key, { ...roomInfo, openLinkId: openLinkIdValue });
+      }
+    }
+    if (openLinkIdValue && this._openLinkInfoCache.has(String(openLinkIdValue))) {
+      const cached = this._openLinkInfoCache.get(String(openLinkIdValue));
+      if (cached?.name && !roomName) {
+        roomName = cached.name;
       }
     }
 

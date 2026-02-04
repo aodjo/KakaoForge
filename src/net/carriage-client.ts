@@ -357,6 +357,17 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Sync open link list (SYNCLINK).
+   */
+  async syncLink(lastToken = 0) {
+    const toLong = toLongValue;
+    const body = {
+      ltk: toLong(lastToken || 0),
+    };
+    return await this.request('SYNCLINK', body);
+  }
+
+  /**
    * Fetch chat room info (CHATINFO).
    */
   async chatInfo(chatId: number | string) {
