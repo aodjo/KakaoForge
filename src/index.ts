@@ -1767,6 +1767,16 @@ export class KakaoForgeClient extends EventEmitter {
       };
       if (width) postBody.w = Math.floor(width);
       if (height) postBody.h = Math.floor(height);
+      const extraValue = typeof opts.extra === 'string' ? opts.extra : '';
+      const captionValue =
+        typeof (opts as any).text === 'string' && (opts as any).text.trim().length > 0
+          ? String((opts as any).text)
+          : '';
+      if (extraValue) {
+        postBody.ex = extraValue;
+      } else if (captionValue) {
+        postBody.ex = JSON.stringify({ cmt: captionValue });
+      }
 
       completeWait = waitForPushMethod(uploadClient, 'COMPLETE', opts.timeoutMs || 20000);
       postRes = await uploadClient.request('POST', postBody, opts.timeoutMs || 10000);
@@ -1906,9 +1916,6 @@ export class KakaoForgeClient extends EventEmitter {
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
     if (typeof attachment === 'string') {
-      if (opts.text && this.debug) {
-        console.warn('[DBG] sendPhoto: text option is ignored for upload-based send.');
-      }
       return this._uploadMedia('photo', attachment, sendOpts, chatId);
     }
     const prepared = await this._prepareMediaAttachment('photo', attachment, sendOpts, chatId);
@@ -1925,9 +1932,6 @@ export class KakaoForgeClient extends EventEmitter {
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
     if (typeof attachment === 'string') {
-      if (opts.text && this.debug) {
-        console.warn('[DBG] sendVideo: text option is ignored for upload-based send.');
-      }
       return this._uploadMedia('video', attachment, sendOpts, chatId);
     }
     const prepared = await this._prepareMediaAttachment('video', attachment, sendOpts, chatId);
@@ -1944,9 +1948,6 @@ export class KakaoForgeClient extends EventEmitter {
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
     if (typeof attachment === 'string') {
-      if (opts.text && this.debug) {
-        console.warn('[DBG] sendAudio: text option is ignored for upload-based send.');
-      }
       return this._uploadMedia('audio', attachment, sendOpts, chatId);
     }
     const prepared = await this._prepareMediaAttachment('audio', attachment, sendOpts, chatId);
@@ -1963,9 +1964,6 @@ export class KakaoForgeClient extends EventEmitter {
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
     if (typeof attachment === 'string') {
-      if (opts.text && this.debug) {
-        console.warn('[DBG] sendFile: text option is ignored for upload-based send.');
-      }
       return this._uploadMedia('file', attachment, sendOpts, chatId);
     }
     const prepared = await this._prepareMediaAttachment('file', attachment, sendOpts, chatId);
