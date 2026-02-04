@@ -115,6 +115,10 @@ export type BackfillAllResult = {
   stored: number;
 };
 
+export type BackfillAllOptions = {
+  limit?: number;
+};
+
 export type SyncAllResult = {
   chats: number;
   newMessages: number;
@@ -135,8 +139,6 @@ export type EditMessageOptions = {
   extra?: string | Record<string, any> | any[];
   supplement?: string;
 };
-
-// Forward API removed (unstable in open chat)
 
 export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
 
@@ -332,7 +334,7 @@ export type ChatModule = {
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
   backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
-  backfillAllMessages: () => Promise<BackfillAllResult>;
+  backfillAllMessages: (opts?: BackfillAllOptions) => Promise<BackfillAllResult>;
   syncAll: () => Promise<SyncAllResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
@@ -1740,7 +1742,7 @@ export class KakaoForgeClient extends EventEmitter {
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
       backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
-      backfillAllMessages: () => this.backfillAllMessages(),
+      backfillAllMessages: (opts) => this.backfillAllMessages(opts),
       syncAll: () => this.syncAll(),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
@@ -3355,7 +3357,7 @@ export class KakaoForgeClient extends EventEmitter {
   /**
    * Backfill all chat rooms (store full history into DB).
    */
-  async backfillAllMessages(): Promise<BackfillAllResult> {
+  async backfillAllMessages(opts: BackfillAllOptions = {}): Promise<BackfillAllResult> {
     if (!this._db) {
       throw new Error('backfillAllMessages requires dbPath (createClient { dbPath })');
     }
@@ -3395,10 +3397,13 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     let stored = 0;
+    const limit = typeof opts.limit === 'number' ? opts.limit : 5000;
     for (const chatId of chatIds) {
       let prevOldest: number | string | null = null;
       while (true) {
-        const result = await this.backfillMessages(chatId);
+        if (stored >= limit) break;
+        const remaining = limit - stored;
+        const result = await this.backfillMessages(chatId, { limit: remaining });
         stored += result.stored;
         if (!result.stored) break;
         if (result.oldestLogId !== undefined && result.oldestLogId !== null) {
