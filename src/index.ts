@@ -622,6 +622,46 @@ function resolveRoomFlags(source: any) {
   return { isGroupChat, isOpenChat };
 }
 
+function extractOpenLinkNameFromMr(input: any): string {
+  if (!input) return '';
+  let parsed: any = input;
+  if (typeof parsed === 'string') {
+    const trimmed = parsed.trim();
+    if (!trimmed) return '';
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return '';
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return '';
+
+  const candidates = [
+    'ln',
+    'linkName',
+    'name',
+    'title',
+    'subject',
+    'roomName',
+  ];
+
+  for (const key of candidates) {
+    const value = parsed[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  const nested = [parsed.openLink, parsed.link, parsed.ol, parsed.open];
+  for (const node of nested) {
+    if (!node || typeof node !== 'object') continue;
+    for (const key of candidates) {
+      const value = node[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+  }
+
+  return '';
+}
+
 function unwrapAttachment(input: any) {
   if (!input || typeof input !== 'object') return input;
   if ('attachment' in input && (input as any).attachment !== undefined) {
@@ -1393,6 +1433,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (body) {
         const prev = this._chatRooms.get(key) || {};
         const updatedChatId = normalizeIdValue(body.c) || resolvedChatId;
+        const openTitle = extractOpenLinkNameFromMr(body.mr);
         const next: ChatRoomInfo = {
           ...prev,
           chatId: updatedChatId,
@@ -1402,6 +1443,10 @@ export class KakaoForgeClient extends EventEmitter {
         const flags = resolveRoomFlags({ ...next, openToken: next.openToken });
         next.isOpenChat = flags.isOpenChat;
         next.isGroupChat = flags.isGroupChat;
+        if (openTitle) {
+          next.title = openTitle;
+          next.roomName = openTitle;
+        }
         this._chatRooms.set(key, next);
 
         const members = body.m || body.members || body.memberList || [];
@@ -1956,6 +2001,15 @@ export class KakaoForgeClient extends EventEmitter {
           const key = String(roomIdValue);
           const prev = this._chatRooms.get(key) || {};
           this._chatRooms.set(key, { ...prev, title: openName, roomName: openName, openLinkId: openLinkIdValue });
+        }
+      }
+      if (!roomName && flags.isOpenChat) {
+        const derived = extractOpenLinkNameFromMr(data.mr);
+        if (derived) {
+          roomName = derived;
+          const key = String(roomIdValue);
+          const prev = this._chatRooms.get(key) || {};
+          this._chatRooms.set(key, { ...prev, title: derived, roomName: derived });
         }
       }
       if (!flags.isOpenChat) {
