@@ -1598,6 +1598,7 @@ export class KakaoForgeClient extends EventEmitter {
   debugGetConf: boolean;
   _conf: any;
   _db: KakaoDb | null;
+  _dbSecondary: KakaoDb | null;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -1691,37 +1692,62 @@ export class KakaoForgeClient extends EventEmitter {
     this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
     this._db = null;
+    this._dbSecondary = null;
     const dbPathAuto = config.dbPath === undefined;
     const dbPath = dbPathAuto ? path.join(process.cwd(), 'KakaoTalk.db') : config.dbPath;
-    if (dbPath) {
-      const resolved = path.resolve(String(dbPath));
-      const tryInit = () => {
-        this._db = new KakaoDb(resolved);
+    const resolveDbPaths = (input: string) => {
+      const resolved = path.resolve(input);
+      const dir = path.dirname(resolved);
+      const baseName = path.basename(resolved).toLowerCase();
+      if (baseName === 'kakaotalk.db') {
+        return {
+          primary: resolved,
+          secondary: path.join(dir, 'KakaoTalk2.db'),
+        };
+      }
+      if (baseName === 'kakaotalk2.db') {
+        return {
+          primary: path.join(dir, 'KakaoTalk.db'),
+          secondary: resolved,
+        };
+      }
+      const ext = path.extname(resolved);
+      const base = ext ? resolved.slice(0, -ext.length) : resolved;
+      return {
+        primary: resolved,
+        secondary: `${base}2${ext}`,
       };
+    };
+    const initDb = (target: string, label: string) => {
+      const tryInit = () => new KakaoDb(target);
       try {
-        tryInit();
+        return tryInit();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        if (dbPathAuto && fs.existsSync(resolved)) {
+        if (dbPathAuto && fs.existsSync(target)) {
           const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const backup = `${resolved}.bak-${stamp}`;
+          const backup = `${target}.bak-${stamp}`;
           try {
-            fs.renameSync(resolved, backup);
-            tryInit();
+            fs.renameSync(target, backup);
+            return tryInit();
           } catch (retryErr) {
             if (this.debug) {
-              console.error('[DBG] DB init failed:', message);
-              console.error('[DBG] DB re-init failed:', retryErr instanceof Error ? retryErr.message : String(retryErr));
+              console.error(`[DBG] ${label} init failed:`, message);
+              console.error(`[DBG] ${label} re-init failed:`, retryErr instanceof Error ? retryErr.message : String(retryErr));
             }
-            this._db = null;
+            return null;
           }
-        } else {
-          if (this.debug) {
-            console.error('[DBG] DB init failed:', message);
-          }
-          this._db = null;
         }
+        if (this.debug) {
+          console.error(`[DBG] ${label} init failed:`, message);
+        }
+        return null;
       }
+    };
+    if (dbPath) {
+      const paths = resolveDbPaths(String(dbPath));
+      this._db = initDb(paths.primary, 'DB');
+      this._dbSecondary = initDb(paths.secondary, 'DB2');
     }
 
     // LOCO clients
@@ -2412,7 +2438,7 @@ export class KakaoForgeClient extends EventEmitter {
     chatLog: any,
     opts: { lastMessage?: string; openLinkId?: number | string; updateRoom?: boolean; updateThread?: boolean } = {}
   ) {
-    if (!this._db || !chatLog) return;
+    if ((!this._db && !this._dbSecondary) || !chatLog) return;
 
     const roomIdValue = normalizeIdValue(chatId || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0);
     const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
@@ -2430,8 +2456,9 @@ export class KakaoForgeClient extends EventEmitter {
         0
     );
 
-    try {
-      this._db.storeChatLog(
+    const store = (db: KakaoDb | null) => {
+      if (!db) return;
+      db.storeChatLog(
         {
           logId: logIdValue,
           chatId: roomIdValue,
@@ -2456,6 +2483,11 @@ export class KakaoForgeClient extends EventEmitter {
           updateThread: opts.updateThread,
         }
       );
+    };
+
+    try {
+      store(this._db);
+      store(this._dbSecondary);
     } catch (err) {
       if (this.debug) {
         console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
