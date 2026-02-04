@@ -10,6 +10,7 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
+import { BubbleClient, type ReactionPayload } from './net/bubble-client';
 import {
   subDeviceLogin,
   refreshOAuthToken,
@@ -84,6 +85,11 @@ export type ReplyTarget = {
 export type ReplyOptions = SendOptions & {
   attachOnly?: boolean;
   attachType?: number;
+};
+
+export type ReactionOptions = {
+  linkId?: number | string;
+  reqId?: number | string;
 };
 
 export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
@@ -264,6 +270,7 @@ export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
   sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  sendReaction: (chatId: number | string, target: any, reactionType: number, opts?: ReactionOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -799,6 +806,40 @@ function assertCalendarOk(res: any, label: string) {
   }
 }
 
+function previewBubbleBody(body: any, limit = 800) {
+  if (body === undefined || body === null) return '';
+  let text = '';
+  if (typeof body === 'string') {
+    text = body;
+  } else {
+    try {
+      text = JSON.stringify(body);
+    } catch {
+      text = String(body);
+    }
+  }
+  if (limit > 0 && text.length > limit) {
+    return `${text.slice(0, limit)}...`;
+  }
+  return text;
+}
+
+function assertBubbleOk(res: any, label: string) {
+  const statusCode = res?.status;
+  if (typeof statusCode === 'number' && statusCode >= 400) {
+    const bodyPreview = previewBubbleBody(res?.body);
+    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
+    throw new Error(`${label} status=${statusCode}${suffix}`);
+  }
+  const body = res?.body;
+  if (body && typeof body === 'object' && typeof body.status === 'number' && body.status !== 0) {
+    const message = body.message ? ` (${body.message})` : '';
+    const bodyPreview = previewBubbleBody(body);
+    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
+    throw new Error(`${label} status=${body.status}${message}${suffix}`);
+  }
+}
+
 function stringifyLossless(obj: unknown) {
   return LosslessJSON.stringify(obj, (key, value) => {
     if (typeof value === 'bigint' || Long.isLong(value)) {
@@ -1062,6 +1103,31 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
   return { logId, userId, text, type, mentions, linkId };
 }
 
+function normalizeReactionTarget(input: any): { logId: number | string; linkId?: number | string; isOpenChat?: boolean } | null {
+  if (input === undefined || input === null) return null;
+  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
+    return { logId: normalizeIdValue(input) };
+  }
+
+  const message = input.message || input.chatLog || input.raw?.chatLog || input;
+  const logId = normalizeIdValue(
+    input.logId ||
+      input.msgId ||
+      input.id ||
+      message?.logId ||
+      message?.msgId ||
+      message?.id ||
+      input.raw?.logId ||
+      input.raw?.msgId ||
+      input.raw?.chatLog?.logId ||
+      0
+  );
+  const linkId = input.linkId ?? message?.linkId ?? input.raw?.li ?? input.raw?.chatLog?.li ?? input.room?.openLinkId;
+  const isOpenChat = input.room?.isOpenChat;
+
+  return { logId, linkId, isOpenChat };
+}
+
 function pickFirstValue<T>(...values: T[]): T | undefined {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') {
@@ -1261,6 +1327,7 @@ export class KakaoForgeClient extends EventEmitter {
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
   _calendar: CalendarClient | null;
+  _bubble: BubbleClient | null;
   _messageHandler: MessageHandler | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _locoAutoConnectAttempted: boolean;
@@ -1352,6 +1419,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._booking = null;
     this._carriage = null;
     this._calendar = null;
+    this._bubble = null;
 
     this._messageHandler = null;
     this._pushHandlers = new Map();
@@ -1381,6 +1449,7 @@ export class KakaoForgeClient extends EventEmitter {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
       sendReply: (chatId, text, replyTo, opts) => this.sendReply(chatId, text, replyTo, opts),
       sendThreadReply: (chatId, threadId, text, opts) => this.sendThreadReply(chatId, threadId, text, opts),
+      sendReaction: (chatId, target, reactionType, opts) => this.sendReaction(chatId, target, reactionType, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
       uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
       uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
@@ -3587,6 +3656,61 @@ export class KakaoForgeClient extends EventEmitter {
     return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Link, extra });
   }
 
+  async sendReaction(chatId: number | string, target: any, reactionType: number, opts: ReactionOptions = {}) {
+    const resolvedChatId = this._resolveChatId(chatId);
+    const targetInfo = normalizeReactionTarget(target);
+    const logIdValue = normalizeIdValue(targetInfo?.logId ?? 0);
+    if (!logIdValue || logIdValue === 0 || logIdValue === '0') {
+      throw new Error('reaction target requires logId');
+    }
+
+    const typeValue = typeof reactionType === 'number' ? reactionType : parseInt(String(reactionType), 10);
+    if (!Number.isFinite(typeValue)) {
+      throw new Error('reactionType must be a number');
+    }
+
+    let linkIdValue: number | string | undefined;
+    if (opts.linkId !== undefined && opts.linkId !== null && opts.linkId !== '') {
+      linkIdValue = normalizeIdValue(opts.linkId);
+    } else if (targetInfo?.linkId !== undefined && targetInfo?.linkId !== null && targetInfo?.linkId !== '') {
+      linkIdValue = normalizeIdValue(targetInfo.linkId);
+    }
+
+    const roomKey = String(resolvedChatId);
+    const roomInfo = this._chatRooms.get(roomKey);
+    const isOpenChat = targetInfo?.isOpenChat ?? roomInfo?.isOpenChat ?? false;
+
+    if (!linkIdValue && roomInfo?.openLinkId) {
+      linkIdValue = normalizeIdValue(roomInfo.openLinkId);
+    }
+
+    if (!linkIdValue && isOpenChat) {
+      await this._ensureOpenChatInfo(resolvedChatId);
+      const refreshed = this._chatRooms.get(roomKey);
+      if (refreshed?.openLinkId) {
+        linkIdValue = normalizeIdValue(refreshed.openLinkId);
+      }
+    }
+
+    if (isOpenChat && (!linkIdValue || linkIdValue === 0 || linkIdValue === '0')) {
+      throw new Error('open chat reaction requires openLinkId');
+    }
+
+    const bubble = this._getBubbleClient();
+    const payload: ReactionPayload = {
+      logId: logIdValue,
+      type: typeValue,
+      reqId: opts.reqId ?? Date.now(),
+    };
+    if (linkIdValue && linkIdValue !== 0 && linkIdValue !== '0') {
+      payload.linkId = linkIdValue;
+    }
+
+    const res = await bubble.sendReaction(resolvedChatId, payload);
+    assertBubbleOk(res, '공감 전송');
+    return res;
+  }
+
   _getCalendarClient() {
     if (this._calendar) return this._calendar;
     if (!this.oauthToken || !this.deviceUuid) {
@@ -3607,6 +3731,28 @@ export class KakaoForgeClient extends EventEmitter {
       dtype: this.dtype,
     });
     return this._calendar;
+  }
+
+  _getBubbleClient() {
+    if (this._bubble) return this._bubble;
+    if (!this.oauthToken || !this.deviceUuid) {
+      throw new Error('Bubble API requires oauthToken/deviceUuid');
+    }
+    const adid = this.adid || this.deviceUuid || '';
+    this.adid = adid;
+    this._bubble = new BubbleClient({
+      oauthToken: this.oauthToken,
+      deviceUuid: this.deviceUuid,
+      deviceId: this.deviceId,
+      appVer: this.appVer,
+      lang: this.lang,
+      os: this.os,
+      timeZone: this.timeZone,
+      hasAccount: this.hasAccount,
+      adid,
+      dtype: this.dtype,
+    });
+    return this._bubble;
   }
 
   async request(method, body = {}) {
@@ -3632,6 +3778,9 @@ export class KakaoForgeClient extends EventEmitter {
     }
     if (this._calendar) {
       this._calendar.oauthToken = this.oauthToken;
+    }
+    if (this._bubble) {
+      this._bubble.oauthToken = this.oauthToken;
     }
 
     console.log('[+] Token refreshed');
