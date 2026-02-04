@@ -7,6 +7,7 @@ export const MessageType = {
   Link: 9,
   Schedule: 13,
   Location: 16,
+  Profile: 17,
   File: 18,
 } as const;
 

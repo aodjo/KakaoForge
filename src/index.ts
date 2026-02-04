@@ -157,6 +157,16 @@ export type ContactPayload = {
   extra?: Record<string, any>;
 };
 
+export type ProfilePayload = {
+  userId: number | string;
+  nickName?: string;
+  fullProfileImageUrl?: string;
+  profileImageUrl?: string;
+  statusMessage?: string;
+  accessPermit?: string;
+  extra?: Record<string, any>;
+};
+
 export type LinkPayload = {
   url?: string;
   text?: string;
@@ -232,6 +242,7 @@ export type ChatModule = {
   sendAudio: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendFile: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendContact: (chatId: number | string, contact: ContactPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendKakaoProfile: (chatId: number | string, profile: ProfilePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
@@ -728,6 +739,33 @@ function normalizeContactAttachment(input: any) {
   return input;
 }
 
+function normalizeProfileAttachment(input: any) {
+  if (!input) return input;
+  if (typeof input === 'string') {
+    return { accessPermit: input };
+  }
+  if (typeof input === 'object') {
+    const attachment: any = { ...input };
+    if (attachment.extra && typeof attachment.extra === 'object') {
+      Object.assign(attachment, attachment.extra);
+      delete attachment.extra;
+    }
+    if (attachment.userId === undefined && attachment.id !== undefined) attachment.userId = attachment.id;
+    if (attachment.nickName === undefined && attachment.nickname !== undefined) attachment.nickName = attachment.nickname;
+    if (attachment.fullProfileImageUrl === undefined && attachment.fullProfileImage !== undefined) {
+      attachment.fullProfileImageUrl = attachment.fullProfileImage;
+    }
+    if (attachment.profileImageUrl === undefined && attachment.profileImage !== undefined) {
+      attachment.profileImageUrl = attachment.profileImage;
+    }
+    if (attachment.statusMessage === undefined && attachment.status !== undefined) {
+      attachment.statusMessage = attachment.status;
+    }
+    return attachment;
+  }
+  return input;
+}
+
 function escapeVCardValue(value: string) {
   return String(value)
     .replace(/\\/g, '\\\\')
@@ -952,6 +990,7 @@ export class KakaoForgeClient extends EventEmitter {
       sendAudio: (chatId, attachment, opts) => this.sendAudio(chatId, attachment, opts),
       sendFile: (chatId, attachment, opts) => this.sendFile(chatId, attachment, opts),
       sendContact: (chatId, contact, opts) => this.sendContact(chatId, contact, opts),
+      sendKakaoProfile: (chatId, profile, opts) => this.sendKakaoProfile(chatId, profile, opts),
       sendLocation: (chatId, location, opts) => this.sendLocation(chatId, location, opts),
       sendSchedule: (chatId, schedule, opts) => this.sendSchedule(chatId, schedule, opts),
       sendLink: (chatId, link, opts) => this.sendLink(chatId, link, opts),
@@ -2476,6 +2515,39 @@ export class KakaoForgeClient extends EventEmitter {
       uploadedAttachment,
       opts,
       'contact'
+    );
+  }
+
+  async sendKakaoProfile(chatId: number | string, profile: ProfilePayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
+    const unwrapped = unwrapAttachment(profile);
+    const normalized = normalizeProfileAttachment(unwrapped);
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+      throw new Error('카카오 프로필 전송에는 profile 정보가 필요합니다.');
+    }
+    const userId = (normalized as any).userId ?? (normalized as any).id;
+    const accessPermit = (normalized as any).accessPermit;
+    if (!userId) {
+      throw new Error('카카오 프로필 전송에는 userId가 필요합니다.');
+    }
+    if (!accessPermit) {
+      throw new Error('카카오 프로필 전송에는 accessPermit이 필요합니다.');
+    }
+    const attachment: any = {
+      userId: Number(userId),
+      nickName: (normalized as any).nickName || (normalized as any).nickname || '',
+      fullProfileImageUrl: (normalized as any).fullProfileImageUrl || '',
+      profileImageUrl: (normalized as any).profileImageUrl || '',
+      statusMessage: (normalized as any).statusMessage || '',
+      accessPermit: String(accessPermit),
+    };
+    const fallbackText = attachment.nickName || '';
+    return this._sendWithAttachment(
+      chatId,
+      MessageType.Profile,
+      opts.text || fallbackText || '',
+      attachment,
+      opts,
+      'profile'
     );
   }
 
