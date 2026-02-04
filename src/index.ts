@@ -896,9 +896,22 @@ function extractMentions(raw: any): any[] | undefined {
 function normalizeIdValue(value: any): number | string {
   if (value === undefined || value === null) return 0;
   if (Long.isLong(value)) return value.toString();
+  if (typeof value === 'object' && value !== null) {
+    if (typeof (value as any).low === 'number' && typeof (value as any).high === 'number') {
+      try {
+        const unsigned = typeof (value as any).unsigned === 'boolean' ? (value as any).unsigned : false;
+        return Long.fromBits((value as any).low, (value as any).high, unsigned).toString();
+      } catch {
+        // fall through
+      }
+    }
+  }
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'string') return value;
-  if (typeof value === 'number') return value;
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) return value.toString();
+    return value;
+  }
   if (typeof value === 'object' && typeof value.toString === 'function') {
     const str = value.toString();
     if (/^\d+$/.test(str)) return str;
@@ -1168,6 +1181,7 @@ export class KakaoForgeClient extends EventEmitter {
   _pushHandlers: Map<string, (payload: any) => void>;
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
+  _chatIdAliases: Map<string, string>;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1252,6 +1266,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._pushHandlers = new Map();
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
+    this._chatIdAliases = new Map();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Map();
@@ -1288,6 +1303,24 @@ export class KakaoForgeClient extends EventEmitter {
   _nextClientMsgId() {
     const seed = this.deviceUuid || String(this.userId || '');
     return nextClientMsgId(seed);
+  }
+
+  _recordChatAlias(chatIdValue: number | string) {
+    const idStr = typeof chatIdValue === 'string' ? chatIdValue : String(chatIdValue);
+    if (!/^\d+$/.test(idStr)) return;
+    if (idStr.length < 16) return;
+    const approx = safeNumber(idStr, 0);
+    if (!approx) return;
+    const approxStr = String(approx);
+    if (approxStr !== idStr) {
+      this._chatIdAliases.set(approxStr, idStr);
+    }
+  }
+
+  _resolveChatId(chatId: number | string) {
+    const normalized = normalizeIdValue(chatId);
+    const key = String(normalized);
+    return this._chatIdAliases.get(key) || normalized;
   }
 
   /**
@@ -1409,7 +1442,7 @@ export class KakaoForgeClient extends EventEmitter {
       const now = Date.now();
       for (const [chatId, updatedAt] of this._memberCacheUpdatedAt.entries()) {
         if (this._shouldRefreshMembers(chatId, now, updatedAt)) {
-          this._fetchMemberList(Number(chatId)).catch(() => {});
+          this._fetchMemberList(chatId).catch(() => {});
         }
       }
     }, this.memberRefreshIntervalMs);
@@ -1664,6 +1697,9 @@ export class KakaoForgeClient extends EventEmitter {
     const roomIdValue = normalizeIdValue(
       data.chatId || data.c || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0
     );
+    if (roomIdValue) {
+      this._recordChatAlias(roomIdValue);
+    }
     const key = roomIdValue ? String(roomIdValue) : '_global';
     const prev = this._messageChains.get(key) || Promise.resolve();
     const next = prev
@@ -1871,6 +1907,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (!chatIdValue) continue;
 
       const key = String(chatIdValue);
+      this._recordChatAlias(chatIdValue);
       const prev = this._chatRooms.get(key) || {};
       const displayMembers = this._extractDisplayMembers(chat);
       const title = this._extractTitle(chat);
@@ -1909,24 +1946,26 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   _ensureMemberList(chatId: number | string) {
-    const key = String(chatId);
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = String(resolvedChatId);
     if (!this._memberCacheUpdatedAt.has(key)) {
-      this._fetchMemberList(chatId, { force: true }).catch(() => {});
+      this._fetchMemberList(resolvedChatId, { force: true }).catch(() => {});
     }
   }
 
   async _waitForMemberContext(chatId: number | string, senderId: number | string) {
     const timeoutMs = this.memberLookupTimeoutMs;
-    const key = String(chatId);
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = String(resolvedChatId);
 
     if (!this._memberCacheUpdatedAt.has(key)) {
-      await this._waitForMemberList(chatId, timeoutMs);
+      await this._waitForMemberList(resolvedChatId, timeoutMs);
     }
 
     if (senderId) {
-      const cached = this._getCachedMemberName(chatId, senderId);
+      const cached = this._getCachedMemberName(resolvedChatId, senderId);
       if (!cached) {
-        await this._waitForMemberName(chatId, senderId, timeoutMs);
+        await this._waitForMemberName(resolvedChatId, senderId, timeoutMs);
       }
     }
   }
@@ -1968,7 +2007,8 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _fetchMemberList(chatId: number | string, { force = false }: any = {}) {
     if (!this._carriage) return;
-    const key = String(chatId);
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = String(resolvedChatId);
     const existing = this._memberListFetchInFlight.get(key);
     if (existing) return existing;
     if (!force && !this._shouldRefreshMembers(key, Date.now())) return;
@@ -1977,11 +2017,11 @@ export class KakaoForgeClient extends EventEmitter {
       let token = 0;
       let pages = 0;
       while (pages < 30) {
-        const res = await this._carriage.memList({ chatId, token, excludeMe: false });
+        const res = await this._carriage.memList({ chatId: resolvedChatId, token, excludeMe: false });
         const body = res?.body || {};
         const members = body.members || body.memberList || body.memList || [];
         if (Array.isArray(members) && members.length > 0) {
-          this._cacheMembers(chatId, members);
+          this._cacheMembers(resolvedChatId, members);
         }
         const nextToken = safeNumber(
           body.token || body.nextToken || body.memberToken || 0,
@@ -1991,7 +2031,7 @@ export class KakaoForgeClient extends EventEmitter {
         token = nextToken;
         pages += 1;
       }
-      this._touchMemberCache(chatId);
+      this._touchMemberCache(resolvedChatId);
     })()
       .catch((err) => {
         if (this.debug) {
@@ -2054,14 +2094,15 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _fetchMemberName(chatId: number | string, userId: number | string) {
     if (!this._carriage) return;
-    const key = `${chatId}:${userId}`;
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = `${resolvedChatId}:${userId}`;
     const existing = this._memberFetchInFlight.get(key);
     if (existing) return existing;
 
     const task = (async () => {
-      const res = await this._carriage.member(chatId, [userId]);
+      const res = await this._carriage.member(resolvedChatId, [userId]);
       const members = res?.body?.members || res?.body?.memberList || res?.body?.memList || [];
-      this._cacheMembers(chatId, members);
+      this._cacheMembers(resolvedChatId, members);
     })()
       .catch((err) => {
         if (this.debug) {
@@ -2209,7 +2250,8 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('LOCO not connected. Call client.connect() first.');
     }
 
-    return await this._carriage.write(chatId, text, msgType, writeOpts);
+    const resolvedChatId = this._resolveChatId(chatId);
+    return await this._carriage.write(resolvedChatId, text, msgType, writeOpts);
   }
 
   async _ensureVideoConf() {
