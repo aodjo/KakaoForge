@@ -2043,16 +2043,31 @@ export class KakaoForgeClient extends EventEmitter {
       });
 
       const bodyText = (res.body || '').trim();
-      const url = (res.json && (res.json.path || res.json.url))
-        ? String(res.json.path || res.json.url)
-        : bodyText;
-      if (!url) {
+      let rawPath = '';
+      if (res.json && typeof res.json === 'object') {
+        rawPath = String((res.json as any).path || (res.json as any).url || '');
+      } else if (typeof res.json === 'string') {
+        rawPath = res.json;
+      } else {
+        rawPath = bodyText;
+      }
+      rawPath = rawPath.trim();
+      if (rawPath.startsWith('"') && rawPath.endsWith('"') && rawPath.length >= 2) {
+        rawPath = rawPath.slice(1, -1);
+      }
+      if (!rawPath) {
         throw new Error(`contact upload failed: empty response`);
       }
 
+      const pathValue = rawPath;
+      const urlValue = /^https?:\/\//i.test(rawPath)
+        ? rawPath
+        : `https://up-m.talk.kakao.com${rawPath.startsWith('/') ? '' : '/'}${rawPath}`;
+
       return {
         name: contact.name,
-        url,
+        url: urlValue,
+        path: pathValue,
         s: stat.size,
       };
     } finally {
@@ -2437,11 +2452,12 @@ export class KakaoForgeClient extends EventEmitter {
       const contactUrl = (normalized as any).url || (normalized as any).path;
       if (contactUrl) {
         const attachment = normalizeContactAttachment({ ...(normalized as any), url: contactUrl });
+        const attachmentPayload = Array.isArray(attachment) ? attachment : [attachment];
         return this._sendWithAttachment(
           chatId,
           MessageType.Contact,
           opts.text || fallbackText || '',
-          attachment,
+          attachmentPayload,
           opts,
           'contact'
         );
@@ -2452,11 +2468,12 @@ export class KakaoForgeClient extends EventEmitter {
       ? { name: contact }
       : (contact as ContactPayload);
     const uploaded = await this._uploadContactVCard(payload, opts);
+    const attachmentPayload = Array.isArray(uploaded) ? uploaded : [uploaded];
     return this._sendWithAttachment(
       chatId,
       MessageType.Contact,
       opts.text || fallbackText || '',
-      uploaded,
+      attachmentPayload,
       opts,
       'contact'
     );
