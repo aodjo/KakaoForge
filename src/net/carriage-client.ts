@@ -160,6 +160,22 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Send raw payload encrypted with V2SL (used for file upload streaming).
+   */
+  writeEncrypted(data: Buffer): Promise<void> {
+    if (!this._socket) {
+      return Promise.reject(new Error('Not connected'));
+    }
+    const encrypted = this._crypto.encrypt(data);
+    return new Promise((resolve, reject) => {
+      this._socket.write(encrypted, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+
+  /**
    * Send LOGINLIST to authenticate and get initial chat list.
    */
   async loginList({
@@ -361,6 +377,32 @@ export class CarriageClient extends EventEmitter {
       clearInterval(this._pingInterval);
       this._pingInterval = null;
     }
+  }
+
+  /**
+   * Gracefully close the socket after pending writes are flushed.
+   */
+  end(timeoutMs = 5000): Promise<void> {
+    this._stopPing();
+    const socket = this._socket;
+    if (!socket) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (this._socket === socket) {
+          socket.destroy();
+          this._socket = null;
+        }
+        resolve();
+      }, timeoutMs);
+      socket.once('close', () => {
+        clearTimeout(timer);
+        if (this._socket === socket) {
+          this._socket = null;
+        }
+        resolve();
+      });
+      socket.end();
+    });
   }
 
   disconnect() {
