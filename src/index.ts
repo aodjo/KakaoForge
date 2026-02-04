@@ -298,6 +298,7 @@ export type ChatModule = {
   sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
   openChatKick: (chatId: number | string, target: any, opts?: OpenChatKickOptions) => Promise<any>;
   openChatBlind: (chatId: number | string, target: any, opts?: OpenChatBlindOptions) => Promise<any>;
+  fetchMessage: (chatId: number | string, logId: number | string) => Promise<MessageEvent>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1687,6 +1688,7 @@ export class KakaoForgeClient extends EventEmitter {
       sendReaction: (chatId, target, reactionType, opts) => this.sendReaction(chatId, target, reactionType, opts),
       openChatKick: (chatId, target, opts) => this.openChatKick(chatId, target, opts),
       openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
+      fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
@@ -2302,6 +2304,20 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   async _emitMessageInternal(data: any) {
+    const msg = await this._buildMessageEvent(data);
+    if (!msg) return;
+
+    if (this._messageHandler) {
+      if (this._messageHandler.length <= 1) {
+        (this._messageHandler as (msg: MessageEvent) => void)(msg);
+      } else {
+        (this._messageHandler as (chat: ChatModule, msg: MessageEvent) => void)(this.chat, msg);
+      }
+    }
+    this.emit('message', this.chat, msg);
+  }
+
+  async _buildMessageEvent(data: any): Promise<MessageEvent | null> {
     const chatLog = data.chatLog || data;
     const roomIdValue = normalizeIdValue(
       data.chatId || data.c || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0
@@ -2460,14 +2476,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    if (this._messageHandler) {
-      if (this._messageHandler.length <= 1) {
-        (this._messageHandler as (msg: MessageEvent) => void)(msg);
-      } else {
-        (this._messageHandler as (chat: ChatModule, msg: MessageEvent) => void)(this.chat, msg);
-      }
-    }
-    this.emit('message', this.chat, msg);
+    return msg;
   }
 
   _applyChatList(body: any) {
@@ -2893,6 +2902,58 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return res?.body || res;
+  }
+
+  /**
+   * Fetch a specific message via LOCO (GETMSGS) and build MessageEvent.
+   */
+  async fetchMessage(chatId: number | string, logId: number | string) {
+    const normalizedLogId = normalizeIdValue(logId);
+    if (!normalizedLogId || normalizedLogId === 0 || normalizedLogId === '0') {
+      throw new Error('fetchMessage requires logId');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    this._recordChatAlias(resolvedChatId);
+    const res = await this._carriage.getMsgs([resolvedChatId], [normalizedLogId]);
+    const body = res?.body || {};
+    const logs =
+      body.chatLogs ||
+      body.chatLog ||
+      body.logs ||
+      body.msgs ||
+      body.messages ||
+      body;
+    let chatLog: any = null;
+    if (Array.isArray(logs)) {
+      chatLog = logs.find((item) => item) || null;
+    } else if (logs && typeof logs === 'object') {
+      chatLog = logs;
+    }
+    if (!chatLog) {
+      throw new Error('message not found');
+    }
+
+    const msg = await this._buildMessageEvent({ chatId: resolvedChatId, chatLog });
+    if (!msg) {
+      throw new Error('message not found');
+    }
+    return msg;
   }
 
   /**
