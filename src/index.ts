@@ -2571,7 +2571,7 @@ export class KakaoForgeClient extends EventEmitter {
 
   _emitMemberEventFromPush(action: MemberAction, packet: any) {
     const body = packet?.body || {};
-    const chatLog = body.chatLog || body.chatlog;
+    const chatLog = extractChatLogPayload(body.chatLog || body.chatlog || body);
     const roomId = normalizeIdValue(
       body.chatId || body.c || body.roomId || chatLog?.chatId || chatLog?.c || 0
     );
@@ -2603,7 +2603,16 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    const chatAuthorId = normalizeIdValue(chatLog?.authorId || chatLog?.userId || 0);
+    if (memberIds.length === 0 && chatLog) {
+      const fallbackIds = extractMemberIdsFromPayload(chatLog, { excludeUserId: packet.method === 'DELMEM' });
+      if (fallbackIds.length > 0) {
+        memberIds = fallbackIds;
+      }
+    }
+
+    const chatAuthorId = normalizeIdValue(
+      chatLog?.authorId || chatLog?.userId || chatLog?.senderId || chatLog?.writerId || 0
+    );
     if (
       packet.method === 'DELMEM' &&
       chatAuthorId &&
@@ -2629,7 +2638,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     if (this.debug && (!actorId || memberIds.length === 0)) {
-      console.log(`[DBG] memberEvent incomplete (${packet.method})`, JSON.stringify(body).substring(0, 200));
+      console.log(`[DBG] memberEvent incomplete (${packet.method})`, previewLossless({ body, chatLog }));
     }
 
     const event = this._buildMemberEvent(resolvedAction, roomId, {
