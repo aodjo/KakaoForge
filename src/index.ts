@@ -60,7 +60,7 @@ export type SendOptions = {
   from?: string;
   extra?: string;
   scope?: number;
-  threadId?: number;
+  threadId?: number | string | Long;
   featureStat?: string;
   silence?: boolean;
   isSilence?: boolean;
