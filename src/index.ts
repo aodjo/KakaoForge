@@ -89,6 +89,8 @@ export type UploadResult = {
   msgId?: number;
   info?: any;
   raw: any;
+  chatLog?: any;
+  complete?: any;
 };
 
 export type LocationPayload = {
@@ -251,6 +253,54 @@ async function sha1FileHex(filePath: string) {
     stream.on('error', (err) => reject(err));
     stream.on('end', () => resolve(hash.digest('hex')));
   });
+}
+
+function waitForPushMethod(client: CarriageClient, method: string, timeoutMs: number) {
+  let settled = false;
+  let timer: NodeJS.Timeout | null = null;
+  let resolveFn: (packet: any) => void = () => {};
+  let rejectFn: (err: Error) => void = () => {};
+
+  const cleanup = () => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    client.off('push', onPush);
+    client.off('error', onError);
+    client.off('disconnected', onClose);
+  };
+
+  const onPush = (packet: any) => {
+    if (packet?.method !== method) return;
+    cleanup();
+    resolveFn(packet);
+  };
+
+  const onError = (err: Error) => {
+    cleanup();
+    rejectFn(err);
+  };
+
+  const onClose = () => {
+    cleanup();
+    rejectFn(new Error(`Upload connection closed before ${method}`));
+  };
+
+  const promise = new Promise<any>((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+    client.on('push', onPush);
+    client.on('error', onError);
+    client.on('disconnected', onClose);
+    if (timeoutMs && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`${method} timeout`));
+      }, timeoutMs);
+    }
+  });
+
+  return { promise, cancel: cleanup };
 }
 
 function parseAttachments(raw: any): any[] {
@@ -1650,7 +1700,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    const checksum = (await sha1FileHex(filePath)).toUpperCase();
+    const checksum = (await sha1FileHex(filePath)).toLowerCase();
     const extRaw = path.extname(filePath);
     const ext = extRaw ? extRaw.replace('.', '').toLowerCase() : '';
 
@@ -1697,43 +1747,28 @@ export class KakaoForgeClient extends EventEmitter {
       }
     });
     let postRes: any = null;
+    let completePacket: any = null;
+    let completeWait: { promise: Promise<any>; cancel: () => void } | null = null;
     try {
       await uploadClient.connect(host, port, opts.timeoutMs || 10000, this.socketKeepAliveMs || 30000);
-      const extraValue = typeof opts.extra === 'string' ? opts.extra : '';
-      const supplementValue = typeof opts.supplement === 'string' ? opts.supplement : '';
-      const deviceType = Number.isFinite(parseInt(String(this.dtype), 10))
-        ? parseInt(String(this.dtype), 10)
-        : 2;
-      const widthValue = width ? Math.floor(width) : 0;
-      const heightValue = height ? Math.floor(height) : 0;
       const postBody: any = {
-        u: toLong(this.userId),
         k: token,
-        t: logType,
         s: toLong(stat.size),
+        f: opts.filename || opts.name || path.basename(filePath),
+        t: logType,
         c: toLong(uploadChatId),
-        mid: toLong(msgId),
-        w: widthValue,
-        h: heightValue,
-        mm: this.mccmnc,
-        nt: this.ntype,
+        mid: toLong(1),
+        ns: opts.noSeen ?? true,
+        u: toLong(this.userId),
         os: this.os,
         av: this.appVer,
-        ex: extraValue,
-        f: opts.filename || opts.name || path.basename(filePath),
-        sp: supplementValue,
-        ns: !!opts.noSeen,
-        dt: deviceType,
-        scp: typeof opts.scope === 'number' ? opts.scope : 1,
-        silence: !!((opts as any).silence || (opts as any).isSilence),
+        nt: this.ntype,
+        mm: this.mccmnc,
       };
-      if ((opts as any).threadId !== undefined && (opts as any).threadId !== null) {
-        postBody.tid = toLong((opts as any).threadId);
-      }
-      if ((opts as any).featureStat) {
-        postBody.featureStat = (opts as any).featureStat;
-      }
+      if (width) postBody.w = Math.floor(width);
+      if (height) postBody.h = Math.floor(height);
 
+      completeWait = waitForPushMethod(uploadClient, 'COMPLETE', opts.timeoutMs || 20000);
       postRes = await uploadClient.request('POST', postBody, opts.timeoutMs || 10000);
       if (typeof postRes.status === 'number' && postRes.status !== 0) {
         throw new Error(`UPLOAD POST failed: status=${postRes.status}`);
@@ -1742,8 +1777,14 @@ export class KakaoForgeClient extends EventEmitter {
       if (offset < stat.size) {
         await streamEncryptedFile(uploadClient, filePath, offset, stat.size, opts.onProgress);
       }
+      completePacket = await completeWait.promise;
+      const completeBody = completePacket?.body || {};
+      if (typeof completeBody.status === 'number' && completeBody.status !== 0) {
+        throw new Error(`UPLOAD COMPLETE failed: status=${completeBody.status}`);
+      }
       await uploadClient.end();
     } finally {
+      if (completeWait) completeWait.cancel();
       uploadClient.disconnect();
     }
 
@@ -1786,12 +1827,16 @@ export class KakaoForgeClient extends EventEmitter {
       if (postBodyRes.d ?? opts.duration) attachment.d = postBodyRes.d ?? opts.duration;
     }
 
+    const completeBody = completePacket?.body || {};
+
     return {
       accessKey: String(token),
       attachment,
       msgId,
-      info: postRes?.body || shipBodyRes,
-      raw: { ship: shipRes, post: postRes },
+      info: { ship: shipBodyRes, post: postRes?.body, complete: completeBody },
+      raw: { ship: shipRes, post: postRes, complete: completePacket },
+      chatLog: completeBody.chatLog,
+      complete: completeBody,
     };
   }
 
@@ -1860,6 +1905,12 @@ export class KakaoForgeClient extends EventEmitter {
       ? opts.msgId
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
+    if (typeof attachment === 'string') {
+      if (opts.text && this.debug) {
+        console.warn('[DBG] sendPhoto: text option is ignored for upload-based send.');
+      }
+      return this._uploadMedia('photo', attachment, sendOpts, chatId);
+    }
     const prepared = await this._prepareMediaAttachment('photo', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, sendOpts, 'photo');
@@ -1873,6 +1924,12 @@ export class KakaoForgeClient extends EventEmitter {
       ? opts.msgId
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
+    if (typeof attachment === 'string') {
+      if (opts.text && this.debug) {
+        console.warn('[DBG] sendVideo: text option is ignored for upload-based send.');
+      }
+      return this._uploadMedia('video', attachment, sendOpts, chatId);
+    }
     const prepared = await this._prepareMediaAttachment('video', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, sendOpts, 'video');
@@ -1886,6 +1943,12 @@ export class KakaoForgeClient extends EventEmitter {
       ? opts.msgId
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
+    if (typeof attachment === 'string') {
+      if (opts.text && this.debug) {
+        console.warn('[DBG] sendAudio: text option is ignored for upload-based send.');
+      }
+      return this._uploadMedia('audio', attachment, sendOpts, chatId);
+    }
     const prepared = await this._prepareMediaAttachment('audio', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, sendOpts, 'audio');
@@ -1899,6 +1962,12 @@ export class KakaoForgeClient extends EventEmitter {
       ? opts.msgId
       : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
     const sendOpts = { ...opts, msgId };
+    if (typeof attachment === 'string') {
+      if (opts.text && this.debug) {
+        console.warn('[DBG] sendFile: text option is ignored for upload-based send.');
+      }
+      return this._uploadMedia('file', attachment, sendOpts, chatId);
+    }
     const prepared = await this._prepareMediaAttachment('file', attachment, sendOpts, chatId);
     const normalized = normalizeFileAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, sendOpts, 'file');
