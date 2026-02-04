@@ -63,6 +63,9 @@ export class KakaoDb {
   private _insertThreadStmt;
   private _updateThreadStmt;
   private _selectChatLogsByUserStmt;
+  private _selectChatLogStmt;
+  private _selectLatestLogIdStmt;
+  private _selectOldestLogIdStmt;
   private _selectChatRoomStmt;
 
   constructor(dbPath: string) {
@@ -102,13 +105,24 @@ export class KakaoDb {
       'SELECT * FROM chat_logs WHERE chat_id = ? AND user_id = ? AND (? = 0 OR id > ?) AND (? = 0 OR id <= ?) ORDER BY id DESC LIMIT ?'
     );
     this._selectChatRoomStmt = this.db.prepare('SELECT * FROM chat_rooms WHERE id = ? LIMIT 1');
+    this._selectChatLogStmt = this.db.prepare('SELECT * FROM chat_logs WHERE chat_id = ? AND id = ? LIMIT 1');
+    this._selectLatestLogIdStmt = this.db.prepare('SELECT MAX(id) AS max_id FROM chat_logs WHERE chat_id = ?');
+    this._selectOldestLogIdStmt = this.db.prepare('SELECT MIN(id) AS min_id FROM chat_logs WHERE chat_id = ?');
   }
 
   close() {
     this.db.close();
   }
 
-  storeChatLog(log: StoredChatLog, opts: { lastMessage?: string; openLinkId?: number | string } = {}) {
+  storeChatLog(
+    log: StoredChatLog,
+    opts: {
+      lastMessage?: string;
+      openLinkId?: number | string;
+      updateRoom?: boolean;
+      updateThread?: boolean;
+    } = {}
+  ) {
     const chatId = toDbValue(log.chatId);
     const logId = toDbValue(log.logId);
     if (!chatId || !logId) return;
@@ -142,12 +156,14 @@ export class KakaoDb {
     );
 
     this._insertChatRoomStmt.run(chatId);
-    const lastMessage = opts.lastMessage ?? message ?? attachment ?? '';
-    const linkId = opts.openLinkId !== undefined ? toDbValue(opts.openLinkId) : null;
-    this._updateChatRoomStmt.run(logId, lastMessage, createdAt || 0, type ?? 1, linkId, chatId);
+    if (opts.updateRoom !== false) {
+      const lastMessage = opts.lastMessage ?? message ?? attachment ?? '';
+      const linkId = opts.openLinkId !== undefined ? toDbValue(opts.openLinkId) : null;
+      this._updateChatRoomStmt.run(logId, lastMessage, createdAt || 0, type ?? 1, linkId, chatId);
+    }
 
     const threadId = toDbValue(log.threadId);
-    if (threadId) {
+    if (threadId && opts.updateThread !== false) {
       this._insertThreadStmt.run(chatId, threadId, logId, logId, logId);
       this._updateThreadStmt.run(logId, logId, logId, chatId, threadId);
     }
@@ -161,6 +177,27 @@ export class KakaoDb {
     const max = toDbValue(opts.max ?? 0) ?? 0;
     const limit = typeof opts.limit === 'number' ? opts.limit : 50;
     return this._selectChatLogsByUserStmt.all(chatIdValue, userIdValue, since, since, max, max, limit);
+  }
+
+  getChatLog(chatId: number | string, logId: number | string) {
+    const chatIdValue = toDbValue(chatId);
+    const logIdValue = toDbValue(logId);
+    if (!chatIdValue || !logIdValue) return null;
+    return this._selectChatLogStmt.get(chatIdValue, logIdValue);
+  }
+
+  getLatestChatLogId(chatId: number | string) {
+    const chatIdValue = toDbValue(chatId);
+    if (!chatIdValue) return 0;
+    const row = this._selectLatestLogIdStmt.get(chatIdValue);
+    return row?.max_id ?? 0;
+  }
+
+  getOldestChatLogId(chatId: number | string) {
+    const chatIdValue = toDbValue(chatId);
+    if (!chatIdValue) return 0;
+    const row = this._selectOldestLogIdStmt.get(chatIdValue);
+    return row?.min_id ?? 0;
   }
 
   getChatRoom(chatId: number | string) {

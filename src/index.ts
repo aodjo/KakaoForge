@@ -95,6 +95,21 @@ export type ReactionOptions = {
   reqId?: number | string;
 };
 
+export type BackfillOptions = {
+  max?: number | string;
+  until?: number | string;
+  count?: number;
+  limit?: number;
+  maxPages?: number;
+};
+
+export type BackfillResult = {
+  stored: number;
+  pages: number;
+  newestLogId?: number | string;
+  oldestLogId?: number | string;
+};
+
 export type OpenChatKickOptions = {
   linkId?: number | string;
   report?: boolean;
@@ -306,6 +321,7 @@ export type ChatModule = {
     userId: number | string,
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
+  backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
@@ -1710,6 +1726,7 @@ export class KakaoForgeClient extends EventEmitter {
       openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
+      backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
@@ -3120,6 +3137,176 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return results;
+  }
+
+  /**
+   * Backfill older messages into the local DB using LOCO (SYNCMSG).
+   */
+  async backfillMessages(chatId: number | string, opts: BackfillOptions = {}): Promise<BackfillResult> {
+    if (!this._db) {
+      throw new Error('backfillMessages requires dbPath (createClient { dbPath })');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    this._recordChatAlias(resolvedChatId);
+
+    const count = typeof opts.count === 'number' ? opts.count : 50;
+    const limit = typeof opts.limit === 'number' ? opts.limit : 500;
+    const maxPages = typeof opts.maxPages === 'number' ? opts.maxPages : 20;
+
+    let maxValue: number | string = normalizeIdValue(opts.max ?? opts.until ?? 0);
+    if (!maxValue || maxValue === 0 || maxValue === '0') {
+      const oldest = this._db.getOldestChatLogId(resolvedChatId);
+      if (oldest && oldest !== 0 && oldest !== '0') {
+        try {
+          const next = BigInt(String(oldest)) - 1n;
+          if (next > 0n) maxValue = next.toString();
+        } catch {
+          const oldestNum = safeNumber(oldest, 0);
+          if (oldestNum > 1) maxValue = oldestNum - 1;
+        }
+      }
+    }
+
+    const toBig = (value: any): bigint | null => {
+      if (value === undefined || value === null) return null;
+      try {
+        return BigInt(String(value));
+      } catch {
+        return null;
+      }
+    };
+
+    let stored = 0;
+    let pages = 0;
+    let newestLogId: number | string | undefined;
+    let oldestLogId: number | string | undefined;
+    let newestBig: bigint | null = null;
+    let oldestBig: bigint | null = null;
+    let currentMax: number | string = maxValue || 0;
+
+    while (pages < maxPages && stored < limit) {
+      const res = await this._carriage.syncMsg({
+        chatId: resolvedChatId,
+        cur: 0,
+        max: currentMax || 0,
+        cnt: count,
+      });
+
+      const logs = res?.body?.chatLogs || [];
+      if (!Array.isArray(logs) || logs.length === 0) break;
+
+      let pageMinValue: number | string | null = null;
+      let pageMaxValue: number | string | null = null;
+      let pageMinBig: bigint | null = null;
+      let pageMaxBig: bigint | null = null;
+
+      for (const log of logs) {
+        const logIdValue = normalizeIdValue(log?.logId || log?.msgId || 0);
+        if (!logIdValue || logIdValue === 0 || logIdValue === '0') continue;
+
+        const logIdBig = toBig(logIdValue);
+        if (logIdBig !== null) {
+          if (pageMinBig === null || logIdBig < pageMinBig) {
+            pageMinBig = logIdBig;
+            pageMinValue = logIdValue;
+          }
+          if (pageMaxBig === null || logIdBig > pageMaxBig) {
+            pageMaxBig = logIdBig;
+            pageMaxValue = logIdValue;
+          }
+        } else {
+          const logIdNum = safeNumber(logIdValue, 0);
+          if (pageMinValue === null || logIdNum < safeNumber(pageMinValue, logIdNum)) {
+            pageMinValue = logIdValue;
+          }
+          if (pageMaxValue === null || logIdNum > safeNumber(pageMaxValue, logIdNum)) {
+            pageMaxValue = logIdValue;
+          }
+        }
+
+        const senderIdValue = normalizeIdValue(log?.authorId || log?.userId || log?.senderId || 0);
+        const attachmentRaw = log?.attachment ?? log?.attachments ?? log?.extra ?? null;
+        this._db.storeChatLog(
+          {
+            logId: logIdValue,
+            chatId: resolvedChatId,
+            userId: senderIdValue,
+            type: safeNumber(log?.type || log?.msgType || 1, 1),
+            message: log?.message || log?.msg || log?.text || '',
+            attachment: attachmentRaw,
+            createdAt: safeNumber(log?.sendAt ?? log?.createdAt ?? log?.created_at ?? 0, 0),
+            deletedAt: safeNumber(log?.deletedAt ?? log?.deleted_at ?? 0, 0),
+            clientMsgId: log?.msgId ?? log?.client_message_id ?? 0,
+            prevId: log?.prevId ?? log?.prev_id ?? 0,
+            referer: log?.referer,
+            supplement: log?.supplement,
+            v: log?.v,
+            threadId: log?.threadId ?? log?.tid ?? log?.thread ?? 0,
+          },
+          { updateRoom: false, updateThread: false }
+        );
+        stored += 1;
+        if (stored >= limit) break;
+      }
+
+      if (pageMaxValue !== null) {
+        const pageMaxBigValue = pageMaxBig ?? toBig(pageMaxValue);
+        if (pageMaxBigValue !== null) {
+          if (newestBig === null || pageMaxBigValue > newestBig) {
+            newestBig = pageMaxBigValue;
+            newestLogId = pageMaxValue;
+          }
+        } else if (!newestLogId || safeNumber(pageMaxValue, 0) > safeNumber(newestLogId, 0)) {
+          newestLogId = pageMaxValue;
+        }
+      }
+
+      if (pageMinValue !== null) {
+        const pageMinBigValue = pageMinBig ?? toBig(pageMinValue);
+        if (pageMinBigValue !== null) {
+          if (oldestBig === null || pageMinBigValue < oldestBig) {
+            oldestBig = pageMinBigValue;
+            oldestLogId = pageMinValue;
+          }
+          const nextMax = pageMinBigValue - 1n;
+          if (nextMax <= 0n) break;
+          const nextMaxValue = nextMax.toString();
+          if (String(currentMax) === nextMaxValue) break;
+          currentMax = nextMaxValue;
+        } else {
+          const minNum = safeNumber(pageMinValue, 0);
+          if (!oldestLogId || minNum < safeNumber(oldestLogId, minNum) || safeNumber(oldestLogId, 0) === 0) {
+            oldestLogId = pageMinValue;
+          }
+          if (minNum <= 1) break;
+          const nextMaxValue = minNum - 1;
+          if (String(currentMax) === String(nextMaxValue)) break;
+          currentMax = nextMaxValue;
+        }
+      } else {
+        break;
+      }
+
+      pages += 1;
+    }
+
+    return { stored, pages, newestLogId, oldestLogId };
   }
 
   /**
