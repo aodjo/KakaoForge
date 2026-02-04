@@ -28,8 +28,6 @@ import { MessageType, type MessageTypeValue } from './types/message';
 import { Reactions, type ReactionTypeValue } from './types/reaction';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
-import { KakaoDb } from './db/kakao-db';
-import { KakaoSecondaryDb } from './db/kakao-secondary-db';
 
 export type TransportMode = 'loco' | null;
 
@@ -96,34 +94,6 @@ export type ReactionOptions = {
   reqId?: number | string;
 };
 
-export type BackfillOptions = {
-  max?: number | string;
-  until?: number | string;
-  count?: number;
-  limit?: number;
-  maxPages?: number;
-};
-
-export type BackfillResult = {
-  stored: number;
-  pages: number;
-  newestLogId?: number | string;
-  oldestLogId?: number | string;
-};
-
-export type BackfillAllResult = {
-  chats: number;
-  stored: number;
-};
-
-export type BackfillAllOptions = {
-  limit?: number;
-};
-
-export type SyncAllResult = {
-  chats: number;
-  newMessages: number;
-};
 
 export type OpenChatKickOptions = {
   linkId?: number | string;
@@ -297,7 +267,6 @@ export type KakaoForgeConfig = {
   transcodeVideos?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
-  dbPath?: string | false;
 };
 
 type AuthFile = {
@@ -332,11 +301,8 @@ export type ChatModule = {
   fetchMessagesByUser: (
     chatId: number | string,
     userId: number | string,
-    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
+    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number }
   ) => Promise<MessageEvent[]>;
-  backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
-  backfillAllMessages: (opts?: BackfillAllOptions) => Promise<BackfillAllResult>;
-  syncAll: () => Promise<SyncAllResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
@@ -1598,9 +1564,6 @@ export class KakaoForgeClient extends EventEmitter {
   ffprobePath: string;
   debugGetConf: boolean;
   _conf: any;
-  _db: KakaoDb | null;
-  _dbSecondary: KakaoSecondaryDb | null;
-
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
   _calendar: CalendarClient | null;
@@ -1625,7 +1588,6 @@ export class KakaoForgeClient extends EventEmitter {
   _memberRefreshTimer: NodeJS.Timeout | null;
   _messageChains: Map<string, Promise<void>>;
   _connectPromise: Promise<any> | null;
-  _syncAllPromise: Promise<SyncAllResult> | null;
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
   _disconnectRequested: boolean;
@@ -1692,64 +1654,6 @@ export class KakaoForgeClient extends EventEmitter {
     this.ffprobePath = config.ffprobePath || '';
     this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
-    this._db = null;
-    this._dbSecondary = null;
-    const dbPathAuto = config.dbPath === undefined;
-    const dbPath = dbPathAuto ? path.join(process.cwd(), 'KakaoTalk.db') : config.dbPath;
-    const resolveDbPaths = (input: string) => {
-      const resolved = path.resolve(input);
-      const dir = path.dirname(resolved);
-      const baseName = path.basename(resolved).toLowerCase();
-      if (baseName === 'kakaotalk.db') {
-        return {
-          primary: resolved,
-          secondary: path.join(dir, 'KakaoTalk2.db'),
-        };
-      }
-      if (baseName === 'kakaotalk2.db') {
-        return {
-          primary: path.join(dir, 'KakaoTalk.db'),
-          secondary: resolved,
-        };
-      }
-      const ext = path.extname(resolved);
-      const base = ext ? resolved.slice(0, -ext.length) : resolved;
-      return {
-        primary: resolved,
-        secondary: `${base}2${ext}`,
-      };
-    };
-    const initDb = (target: string, label: string, kind: 'primary' | 'secondary') => {
-      const tryInit = () => (kind === 'secondary' ? new KakaoSecondaryDb(target) : new KakaoDb(target));
-      try {
-        return tryInit();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (dbPathAuto && fs.existsSync(target)) {
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const backup = `${target}.bak-${stamp}`;
-          try {
-            fs.renameSync(target, backup);
-            return tryInit();
-          } catch (retryErr) {
-            if (this.debug) {
-              console.error(`[DBG] ${label} init failed:`, message);
-              console.error(`[DBG] ${label} re-init failed:`, retryErr instanceof Error ? retryErr.message : String(retryErr));
-            }
-            return null;
-          }
-        }
-        if (this.debug) {
-          console.error(`[DBG] ${label} init failed:`, message);
-        }
-        return null;
-      }
-    };
-    if (dbPath) {
-      const paths = resolveDbPaths(String(dbPath));
-      this._db = initDb(paths.primary, 'DB', 'primary') as KakaoDb | null;
-      this._dbSecondary = initDb(paths.secondary, 'DB2', 'secondary') as KakaoSecondaryDb | null;
-    }
 
     // LOCO clients
     this._booking = null;
@@ -1777,7 +1681,6 @@ export class KakaoForgeClient extends EventEmitter {
     this._memberRefreshTimer = null;
     this._messageChains = new Map();
     this._connectPromise = null;
-    this._syncAllPromise = null;
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._disconnectRequested = false;
@@ -1791,9 +1694,6 @@ export class KakaoForgeClient extends EventEmitter {
       openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
-      backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
-      backfillAllMessages: (opts) => this.backfillAllMessages(opts),
-      syncAll: () => this.syncAll(),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
@@ -1914,7 +1814,6 @@ export class KakaoForgeClient extends EventEmitter {
           next.roomName = openTitle;
         }
         this._chatRooms.set(key, next);
-
         const members = body.m || body.members || body.memberList || [];
         if (Array.isArray(members) && members.length > 0) {
           this._cacheMembers(resolvedChatId, members);
@@ -2303,7 +2202,6 @@ export class KakaoForgeClient extends EventEmitter {
     console.log('[+] Bot is ready!');
     this.emit('ready', this.chat);
     this._startMemberRefresh();
-    this._runAutoSync();
 
       return loginRes;
     })();
@@ -2345,16 +2243,6 @@ export class KakaoForgeClient extends EventEmitter {
       throw lastErr;
     }
     throw new Error('Ticket CHECKIN failed: no endpoints attempted');
-  }
-
-  async _runAutoSync() {
-    try {
-      await this.syncAll();
-    } catch (err) {
-      if (this.debug) {
-        console.error('[DBG] autoSync failed:', err instanceof Error ? err.message : String(err));
-      }
-    }
   }
 
   _onPush(packet) {
@@ -2432,66 +2320,6 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
     this.emit('message', this.chat, msg);
-  }
-
-  _storeChatLogToDb(
-    chatId: number | string,
-    chatLog: any,
-    opts: { lastMessage?: string; openLinkId?: number | string; updateRoom?: boolean; updateThread?: boolean } = {}
-  ) {
-    if (!this._db || !chatLog) return;
-
-    const roomIdValue = normalizeIdValue(chatId || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0);
-    const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
-    if (!roomIdValue || !logIdValue || roomIdValue === 0 || logIdValue === 0) return;
-
-    const senderIdValue = normalizeIdValue(chatLog.authorId || chatLog.senderId || chatLog.userId || 0);
-    const text = chatLog.message || chatLog.msg || chatLog.text || '';
-    const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
-    const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
-    const openLinkIdValue = normalizeIdValue(
-      opts.openLinkId ??
-        extractOpenLinkIdFromRaw({ chatLog }) ??
-        chatLog.li ??
-        chatLog.linkId ??
-        0
-    );
-
-    const store = () => {
-      this._db!.storeChatLog(
-        {
-          logId: logIdValue,
-          chatId: roomIdValue,
-          userId: senderIdValue,
-          type,
-          message: text,
-          attachment: attachmentRaw,
-          createdAt: safeNumber(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.created_at ?? 0, 0),
-          deletedAt: safeNumber(chatLog.deletedAt ?? chatLog.deleted_at ?? 0, 0),
-          clientMsgId: chatLog.msgId ?? chatLog.client_message_id ?? 0,
-          prevId: chatLog.prevId ?? chatLog.prev_id ?? 0,
-          referer: chatLog.referer,
-          supplement: chatLog.supplement,
-          v: chatLog.v,
-          threadId: chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0,
-        },
-        {
-          lastMessage:
-            (opts.lastMessage ?? text) || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
-          openLinkId: openLinkIdValue || undefined,
-          updateRoom: opts.updateRoom,
-          updateThread: opts.updateThread,
-        }
-      );
-    };
-
-    try {
-      store();
-    } catch (err) {
-      if (this.debug) {
-        console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
-      }
-    }
   }
 
   async _buildMessageEvent(data: any): Promise<MessageEvent | null> {
@@ -2643,12 +2471,6 @@ export class KakaoForgeClient extends EventEmitter {
       type,
       logId: logIdValue,
     };
-
-    const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
-    this._storeChatLogToDb(roomIdValue, chatLog, {
-      lastMessage: text || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
-      openLinkId: openLinkIdValue || undefined,
-    });
 
     if (roomIdValue) {
       const key = String(roomIdValue);
@@ -3079,8 +2901,6 @@ export class KakaoForgeClient extends EventEmitter {
         if (logId > cur) {
           if (emit) {
             this._emitMessage({ chatId, chatLog: log });
-          } else {
-            this._storeChatLogToDb(chatId, log);
           }
         }
         if (logId > maxLogId) maxLogId = logId;
@@ -3149,44 +2969,11 @@ export class KakaoForgeClient extends EventEmitter {
   async fetchMessagesByUser(
     chatId: number | string,
     userId: number | string,
-    opts: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean } = {}
+    opts: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number } = {}
   ) {
     const normalizedUserId = normalizeIdValue(userId);
     if (!normalizedUserId || normalizedUserId === 0 || normalizedUserId === '0') {
       throw new Error('fetchMessagesByUser requires userId');
-    }
-
-    if (this._db && opts.useDb !== false) {
-      const rows = this._db.getChatLogsByUser(chatId, normalizedUserId, {
-        since: opts.since,
-        max: opts.max,
-        limit: typeof opts.limit === 'number' ? opts.limit : 50,
-      });
-      if (rows.length > 0 || opts.useDb === true) {
-        const roomRow = this._db.getChatRoom(chatId);
-        const openLinkId = roomRow?.link_id ?? roomRow?.linkId;
-        const results: MessageEvent[] = [];
-        for (const row of rows) {
-          const chatLog = {
-            logId: row.id,
-            chatId: row.chat_id,
-            authorId: row.user_id,
-            type: row.type,
-            message: row.message,
-            attachment: row.attachment,
-            sendAt: row.created_at,
-            deletedAt: row.deleted_at,
-            msgId: row.client_message_id,
-            prevId: row.prev_id,
-            referer: row.referer,
-            supplement: row.supplement,
-            v: row.v,
-          };
-          const msg = await this._buildMessageEvent({ chatId, chatLog, openLinkId });
-          if (msg) results.push(msg);
-        }
-        return results;
-      }
     }
 
     if (!this._carriage && !this._locoAutoConnectAttempted) {
@@ -3253,304 +3040,6 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return results;
-  }
-
-  /**
-   * Backfill older messages into the local DB using LOCO (SYNCMSG).
-   */
-  async backfillMessages(chatId: number | string, opts: BackfillOptions = {}): Promise<BackfillResult> {
-    if (!this._db) {
-      throw new Error('backfillMessages requires dbPath (createClient { dbPath })');
-    }
-
-    if (!this._carriage && !this._locoAutoConnectAttempted) {
-      this._locoAutoConnectAttempted = true;
-      try {
-        await this.connect();
-      } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] LOCO auto-connect failed:', err.message);
-        }
-      }
-    }
-
-    if (!this._carriage) {
-      throw new Error('LOCO not connected. Call client.connect() first.');
-    }
-
-    const resolvedChatId = this._resolveChatId(chatId);
-    this._recordChatAlias(resolvedChatId);
-
-    const count = typeof opts.count === 'number' ? opts.count : 50;
-    const limit = typeof opts.limit === 'number' ? opts.limit : 500;
-    const maxPages = typeof opts.maxPages === 'number' ? opts.maxPages : 20;
-
-    let maxValue: number | string = normalizeIdValue(opts.max ?? opts.until ?? 0);
-    if (!maxValue || maxValue === 0 || maxValue === '0') {
-      const oldest = this._db.getOldestChatLogId(resolvedChatId);
-      if (oldest && oldest !== 0 && oldest !== '0') {
-        try {
-          const next = BigInt(String(oldest)) - 1n;
-          if (next > 0n) maxValue = next.toString();
-        } catch {
-          const oldestNum = safeNumber(oldest, 0);
-          if (oldestNum > 1) maxValue = oldestNum - 1;
-        }
-      }
-    }
-
-    const toBig = (value: any): bigint | null => {
-      if (value === undefined || value === null) return null;
-      try {
-        return BigInt(String(value));
-      } catch {
-        return null;
-      }
-    };
-
-    let stored = 0;
-    let pages = 0;
-    let newestLogId: number | string | undefined;
-    let oldestLogId: number | string | undefined;
-    let newestBig: bigint | null = null;
-    let oldestBig: bigint | null = null;
-    let currentMax: number | string = maxValue || 0;
-
-    while (pages < maxPages && stored < limit) {
-      const res = await this._carriage.syncMsg({
-        chatId: resolvedChatId,
-        cur: 0,
-        max: currentMax || 0,
-        cnt: count,
-      });
-
-      const logs = res?.body?.chatLogs || [];
-      if (!Array.isArray(logs) || logs.length === 0) break;
-
-      let pageMinValue: number | string | null = null;
-      let pageMaxValue: number | string | null = null;
-      let pageMinBig: bigint | null = null;
-      let pageMaxBig: bigint | null = null;
-
-      for (const log of logs) {
-        const logIdValue = normalizeIdValue(log?.logId || log?.msgId || 0);
-        if (!logIdValue || logIdValue === 0 || logIdValue === '0') continue;
-
-        const logIdBig = toBig(logIdValue);
-        if (logIdBig !== null) {
-          if (pageMinBig === null || logIdBig < pageMinBig) {
-            pageMinBig = logIdBig;
-            pageMinValue = logIdValue;
-          }
-          if (pageMaxBig === null || logIdBig > pageMaxBig) {
-            pageMaxBig = logIdBig;
-            pageMaxValue = logIdValue;
-          }
-        } else {
-          const logIdNum = safeNumber(logIdValue, 0);
-          if (pageMinValue === null || logIdNum < safeNumber(pageMinValue, logIdNum)) {
-            pageMinValue = logIdValue;
-          }
-          if (pageMaxValue === null || logIdNum > safeNumber(pageMaxValue, logIdNum)) {
-            pageMaxValue = logIdValue;
-          }
-        }
-
-        this._storeChatLogToDb(resolvedChatId, log, {
-          updateRoom: false,
-          updateThread: false,
-        });
-        stored += 1;
-        if (stored >= limit) break;
-      }
-
-      if (pageMaxValue !== null) {
-        const pageMaxBigValue = pageMaxBig ?? toBig(pageMaxValue);
-        if (pageMaxBigValue !== null) {
-          if (newestBig === null || pageMaxBigValue > newestBig) {
-            newestBig = pageMaxBigValue;
-            newestLogId = pageMaxValue;
-          }
-        } else if (!newestLogId || safeNumber(pageMaxValue, 0) > safeNumber(newestLogId, 0)) {
-          newestLogId = pageMaxValue;
-        }
-      }
-
-      if (pageMinValue !== null) {
-        const pageMinBigValue = pageMinBig ?? toBig(pageMinValue);
-        if (pageMinBigValue !== null) {
-          if (oldestBig === null || pageMinBigValue < oldestBig) {
-            oldestBig = pageMinBigValue;
-            oldestLogId = pageMinValue;
-          }
-          const nextMax = pageMinBigValue - 1n;
-          if (nextMax <= 0n) break;
-          const nextMaxValue = nextMax.toString();
-          if (String(currentMax) === nextMaxValue) break;
-          currentMax = nextMaxValue;
-        } else {
-          const minNum = safeNumber(pageMinValue, 0);
-          if (!oldestLogId || minNum < safeNumber(oldestLogId, minNum) || safeNumber(oldestLogId, 0) === 0) {
-            oldestLogId = pageMinValue;
-          }
-          if (minNum <= 1) break;
-          const nextMaxValue = minNum - 1;
-          if (String(currentMax) === String(nextMaxValue)) break;
-          currentMax = nextMaxValue;
-        }
-      } else {
-        break;
-      }
-
-      pages += 1;
-    }
-
-    return { stored, pages, newestLogId, oldestLogId };
-  }
-
-  /**
-   * Backfill all chat rooms (store full history into DB).
-   */
-  async backfillAllMessages(opts: BackfillAllOptions = {}): Promise<BackfillAllResult> {
-    if (!this._db) {
-      throw new Error('backfillAllMessages requires dbPath (createClient { dbPath })');
-    }
-
-    if (!this._carriage && !this._locoAutoConnectAttempted) {
-      this._locoAutoConnectAttempted = true;
-      try {
-        await this.connect();
-      } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] LOCO auto-connect failed:', err.message);
-        }
-      }
-    }
-
-    if (!this._carriage) {
-      throw new Error('LOCO not connected. Call client.connect() first.');
-    }
-
-    const list = await this.getChatRooms();
-    const chatIds = new Set<number | string>();
-    if (Array.isArray(list?.chats)) {
-      for (const chat of list.chats) {
-        const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
-        if (id && id !== 0 && id !== '0') {
-          chatIds.add(id);
-        }
-      }
-    }
-    if (chatIds.size === 0) {
-      for (const key of this._chatRooms.keys()) {
-        const id = normalizeIdValue(key);
-        if (id && id !== 0 && id !== '0') {
-          chatIds.add(id);
-        }
-      }
-    }
-
-    let stored = 0;
-    const limit = typeof opts.limit === 'number' ? opts.limit : 5000;
-    for (const chatId of chatIds) {
-      let prevOldest: number | string | null = null;
-      while (true) {
-        if (stored >= limit) break;
-        const remaining = limit - stored;
-        const result = await this.backfillMessages(chatId, { limit: remaining });
-        stored += result.stored;
-        if (!result.stored) break;
-        if (result.oldestLogId !== undefined && result.oldestLogId !== null) {
-          const oldestKey = String(result.oldestLogId);
-          if (prevOldest !== null && String(prevOldest) === oldestKey) break;
-          prevOldest = result.oldestLogId;
-        } else {
-          break;
-        }
-      }
-    }
-
-    return { chats: chatIds.size, stored };
-  }
-
-  /**
-   * Sync all chats (KakaoTalk-like flow).
-   */
-  async syncAll(): Promise<SyncAllResult> {
-    if (this._syncAllPromise) return this._syncAllPromise;
-
-    this._syncAllPromise = (async () => {
-      const emit = false;
-      const count = 50;
-
-      if (!this._carriage && !this._locoAutoConnectAttempted) {
-        this._locoAutoConnectAttempted = true;
-        try {
-          await this.connect();
-        } catch (err) {
-          if (this.debug) {
-            console.error('[DBG] LOCO auto-connect failed:', err.message);
-          }
-        }
-      }
-
-      if (!this._carriage) {
-        throw new Error('LOCO not connected. Call client.connect() first.');
-      }
-
-      const chatIds = new Set<number | string>();
-      if (this._chatRooms.size > 0) {
-        for (const key of this._chatRooms.keys()) {
-          const id = normalizeIdValue(key);
-          if (id && id !== 0 && id !== '0') {
-            chatIds.add(id);
-          }
-        }
-      } else {
-        const list = await this.getChatRooms();
-        if (Array.isArray(list?.chats)) {
-          for (const chat of list.chats) {
-            const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
-            if (id && id !== 0 && id !== '0') {
-              chatIds.add(id);
-            }
-          }
-        }
-      }
-
-      let newMessages = 0;
-      for (const chatId of chatIds) {
-        const resolvedChatId = this._resolveChatId(chatId);
-        let since: number | string = 0;
-        if (this._db) {
-          const latest = this._db.getLatestChatLogId(resolvedChatId);
-          if (latest && latest !== 0 && latest !== '0') {
-            since = latest;
-          }
-        }
-        if (!since || since === 0 || since === '0') {
-          const room = this._chatRooms.get(String(resolvedChatId));
-          if (room?.lastLogId) {
-            since = normalizeIdValue(room.lastLogId);
-          }
-        }
-        const res = await this.syncMessages(resolvedChatId, {
-          since,
-          count,
-          emit,
-        });
-        const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
-        if (Array.isArray(logs)) newMessages += logs.length;
-      }
-
-      return { chats: chatIds.size, newMessages };
-    })();
-
-    try {
-      return await this._syncAllPromise;
-    } finally {
-      this._syncAllPromise = null;
-    }
   }
 
   /**
