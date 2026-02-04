@@ -1854,12 +1854,15 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const roomInfo = this._chatRooms.get(String(roomIdValue)) || {};
-    let roomName = roomInfo.roomName || roomInfo.title || '';
+    const initialFlags = resolveRoomFlags(roomInfo);
+    let roomName = initialFlags.isOpenChat
+      ? (roomInfo.title || '')
+      : (roomInfo.roomName || roomInfo.title || '');
     if (!roomName) {
       roomName = data.roomName || data.chatRoomName || data.title || roomName;
     }
 
-    let flags = resolveRoomFlags(roomInfo);
+    let flags = initialFlags;
 
     if (roomIdValue) {
       if (flags.isOpenChat) {
@@ -1890,7 +1893,9 @@ export class KakaoForgeClient extends EventEmitter {
         senderName = this._getCachedMemberName(roomIdValue, senderIdValue) || senderName;
       }
       if (!roomName) {
-        roomName = refreshed.roomName || refreshed.title || roomName;
+        roomName = flags.isOpenChat
+          ? (refreshed.title || roomName)
+          : (refreshed.roomName || refreshed.title || roomName);
       }
       if (!roomName && !flags.isOpenChat) {
         const derived = this._buildRoomNameFromMembers(String(roomIdValue));
@@ -2042,11 +2047,16 @@ export class KakaoForgeClient extends EventEmitter {
       const flags = resolveRoomFlags(chat);
       const displayMembers = this._extractDisplayMembers(chat);
       const title = this._extractTitle(chat);
-      const roomName =
-        title ||
-        (!flags.isOpenChat && displayMembers.length > 0 ? displayMembers.join(', ') : '') ||
-        prev.roomName ||
-        '';
+      let roomName = '';
+      if (title) {
+        roomName = title;
+      } else if (flags.isOpenChat) {
+        roomName = prev.title || '';
+      } else if (displayMembers.length > 0) {
+        roomName = displayMembers.join(', ');
+      } else {
+        roomName = prev.roomName || '';
+      }
 
       const lastChatLogId = safeNumber(
         chat.lastChatLogId || chat.lastMessageId || chat.lastLogId || chat.lastSeenLogId,
