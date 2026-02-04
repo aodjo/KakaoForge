@@ -273,6 +273,11 @@ export type KakaoForgeConfig = {
   deviceUuid?: string;
   authPath?: string;
   autoConnect?: boolean;
+  autoSync?: SyncMode | boolean;
+  autoSyncEmit?: boolean;
+  autoSyncCount?: number;
+  autoSyncLimitPerChat?: number;
+  autoSyncMaxPages?: number;
   autoReconnect?: boolean;
   reconnectMinDelayMs?: number;
   reconnectMaxDelayMs?: number;
@@ -300,7 +305,7 @@ export type KakaoForgeConfig = {
   transcodeVideos?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
-  dbPath?: string;
+  dbPath?: string | false;
 };
 
 type AuthFile = {
@@ -1599,6 +1604,11 @@ export class KakaoForgeClient extends EventEmitter {
   ffmpegPath: string;
   ffprobePath: string;
   debugGetConf: boolean;
+  _autoSyncMode: SyncMode | null;
+  _autoSyncEmit: boolean;
+  _autoSyncCount: number;
+  _autoSyncLimitPerChat: number;
+  _autoSyncMaxPages: number;
   _conf: any;
   _db: KakaoDb | null;
 
@@ -1693,8 +1703,9 @@ export class KakaoForgeClient extends EventEmitter {
     this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
     this._db = null;
-    if (config.dbPath) {
-      const resolved = path.resolve(config.dbPath);
+    const dbPath = config.dbPath === undefined ? path.join(process.cwd(), 'KakaoTalk.db') : config.dbPath;
+    if (dbPath) {
+      const resolved = path.resolve(String(dbPath));
       try {
         this._db = new KakaoDb(resolved);
       } catch (err) {
@@ -1703,6 +1714,20 @@ export class KakaoForgeClient extends EventEmitter {
         }
       }
     }
+    const autoSyncValue = config.autoSync;
+    let autoSyncMode: SyncMode | null = 'full';
+    if (autoSyncValue === false) {
+      autoSyncMode = null;
+    } else if (typeof autoSyncValue === 'string') {
+      autoSyncMode = autoSyncValue;
+    }
+    this._autoSyncMode = autoSyncMode;
+    this._autoSyncEmit = config.autoSyncEmit === true;
+    this._autoSyncCount = typeof config.autoSyncCount === 'number' ? config.autoSyncCount : 50;
+    this._autoSyncLimitPerChat = typeof config.autoSyncLimitPerChat === 'number'
+      ? config.autoSyncLimitPerChat
+      : 500;
+    this._autoSyncMaxPages = typeof config.autoSyncMaxPages === 'number' ? config.autoSyncMaxPages : 10;
 
     // LOCO clients
     this._booking = null;
@@ -2254,6 +2279,7 @@ export class KakaoForgeClient extends EventEmitter {
     console.log('[+] Bot is ready!');
     this.emit('ready', this.chat);
     this._startMemberRefresh();
+    this._runAutoSync();
 
       return loginRes;
     })();
@@ -2295,6 +2321,30 @@ export class KakaoForgeClient extends EventEmitter {
       throw lastErr;
     }
     throw new Error('Ticket CHECKIN failed: no endpoints attempted');
+  }
+
+  async _runAutoSync() {
+    let mode = this._autoSyncMode;
+    if (!mode) return;
+    if ((mode === 'history' || mode === 'full') && !this._db) {
+      if (this.debug) {
+        console.warn('[DBG] autoSync downgraded to new (dbPath disabled)');
+      }
+      mode = 'new';
+    }
+    try {
+      await this.syncAll({
+        mode,
+        emit: this._autoSyncEmit,
+        count: this._autoSyncCount,
+        limitPerChat: this._autoSyncLimitPerChat,
+        maxPages: this._autoSyncMaxPages,
+      });
+    } catch (err) {
+      if (this.debug) {
+        console.error('[DBG] autoSync failed:', err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   _onPush(packet) {
@@ -3403,6 +3453,12 @@ export class KakaoForgeClient extends EventEmitter {
           const latest = this._db.getLatestChatLogId(resolvedChatId);
           if (latest && latest !== 0 && latest !== '0') {
             since = latest;
+          }
+        }
+        if (!since || since === 0 || since === '0') {
+          const room = this._chatRooms.get(String(resolvedChatId));
+          if (room?.lastLogId) {
+            since = normalizeIdValue(room.lastLogId);
           }
         }
         const res = await this.syncMessages(resolvedChatId, {
