@@ -2398,6 +2398,11 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    if (roomIdValue && flags.isOpenChat) {
+      await this._ensureMemberType(roomIdValue, senderIdValue);
+      await this._ensureMemberType(roomIdValue, this.userId);
+    }
+
     if (roomIdValue && (!senderName || !roomName)) {
       if (flags.isOpenChat) {
         await this._ensureOpenChatInfo(roomIdValue, senderIdValue);
@@ -2495,6 +2500,13 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return msg;
+  }
+
+  async _ensureMemberType(chatId: number | string, userId: number | string) {
+    if (!userId) return;
+    const cached = this._getCachedMemberType(chatId, userId);
+    if (typeof cached === 'number') return;
+    await this._waitForMemberList(chatId, this.memberLookupTimeoutMs);
   }
 
   _applyChatList(body: any) {
