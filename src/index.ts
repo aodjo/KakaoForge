@@ -2292,6 +2292,11 @@ export class KakaoForgeClient extends EventEmitter {
       if (info) {
         this._updateChatRooms([info]);
       }
+    } else if (packet.method === 'SYNCMEMT' || packet.method === 'SETMEMTYPE') {
+      const applied = this._applyMemberTypePush(packet);
+      if (!applied && this.debug) {
+        console.log(`[DBG] Push: ${packet.method}`, JSON.stringify(packet.body).substring(0, 200));
+      }
     } else if (packet.method === 'KICKOUT') {
       console.error('[!] KICKOUT received:', JSON.stringify(packet.body));
       this.emit('kickout', packet.body);
@@ -2862,6 +2867,39 @@ export class KakaoForgeClient extends EventEmitter {
         this._chatRooms.set(key, { ...room, roomName: derived });
       }
     }
+  }
+
+  _applyMemberTypePush(packet: any) {
+    const body = packet?.body || {};
+    const resolvedChatId = normalizeIdValue(body.chatId || body.c || 0);
+    if (!resolvedChatId) return false;
+
+    const members = body.members || body.memberList || body.memList;
+    if (Array.isArray(members) && members.length > 0) {
+      this._cacheMembers(resolvedChatId, members);
+      return true;
+    }
+
+    const memberIds = body.memberIds || body.mids;
+    const memberTypes = body.memberTypes || body.mts;
+    if (!Array.isArray(memberIds) || !Array.isArray(memberTypes)) return false;
+    if (memberIds.length === 0 || memberIds.length !== memberTypes.length) return false;
+
+    const key = String(resolvedChatId);
+    const typeMap = this._memberTypes.get(key) || new Map<string, number>();
+    for (let i = 0; i < memberIds.length; i += 1) {
+      const userId = normalizeIdValue(memberIds[i]);
+      if (!userId) continue;
+      const parsed = safeNumber(memberTypes[i], NaN);
+      if (Number.isNaN(parsed)) continue;
+      typeMap.set(String(userId), parsed);
+    }
+    if (typeMap.size > 0) {
+      this._memberTypes.set(key, typeMap);
+      this._touchMemberCache(resolvedChatId);
+      return true;
+    }
+    return false;
   }
 
   _resolveMemberType(chatId: number | string, userId: number | string): MemberTypeValue {
