@@ -1752,24 +1752,16 @@ export class KakaoForgeClient extends EventEmitter {
     const attachment: Record<string, any> = {};
     if (type === 'video') {
       const tk = postBodyRes.tk || postBodyRes.token || '';
-      const k = postBodyRes.k || postBodyRes.key || '';
-      const resolvedTk = tk || '';
-      const resolvedK = k || (resolvedTk ? '' : shipKey);
-      if (!resolvedTk && !resolvedK) {
+      if (!tk) {
         const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
         throw new Error(`UPLOAD POST missing video token: ${preview}`);
       }
-      if (resolvedTk) attachment.tk = resolvedTk;
-      if (resolvedK) attachment.k = resolvedK;
+      attachment.tk = tk;
+      attachment.k = shipKey;
       if (postBodyRes.tkh) attachment.tkh = postBodyRes.tkh;
       if (postBodyRes.urlh) attachment.urlh = postBodyRes.urlh;
     } else {
-      const k = postBodyRes.k || postBodyRes.key || shipKey;
-      if (!k) {
-        const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
-        throw new Error(`UPLOAD POST missing key: ${preview}`);
-      }
-      attachment.k = k;
+      attachment.k = shipKey;
     }
 
     attachment.cs = postBodyRes.cs || checksum;
