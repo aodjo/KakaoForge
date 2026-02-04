@@ -9,10 +9,11 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
-import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
+import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId, buildUserAgent } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
 import { guessMime, readImageSize } from './util/media';
+import { uploadMultipartFile } from './net/upload-client';
 
 export type TransportMode = 'loco' | null;
 
@@ -150,6 +151,9 @@ export type ContactPayload = {
   phones?: string[];
   email?: string;
   vcard?: string;
+  url?: string;
+  path?: string;
+  filePath?: string;
   extra?: Record<string, any>;
 };
 
@@ -715,9 +719,46 @@ function normalizeContactAttachment(input: any) {
       Object.assign(attachment, attachment.extra);
       delete attachment.extra;
     }
+    if (!attachment.url && attachment.path) {
+      attachment.url = attachment.path;
+      delete attachment.path;
+    }
     return attachment;
   }
   return input;
+}
+
+function escapeVCardValue(value: string) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,');
+}
+
+function buildVCard(contact: ContactPayload) {
+  const name = contact?.name ? String(contact.name) : '';
+  const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
+  const escapedName = escapeVCardValue(name);
+  lines.push(`N:;${escapedName};;;`);
+  if (escapedName) {
+    lines.push(`FN:${escapedName}`);
+  }
+  const phones: string[] = [];
+  if (contact?.phone) phones.push(String(contact.phone));
+  if (Array.isArray(contact?.phones)) {
+    for (const phone of contact.phones) {
+      if (phone) phones.push(String(phone));
+    }
+  }
+  for (const phone of phones) {
+    lines.push(`TEL;TYPE=CELL:${escapeVCardValue(phone)}`);
+  }
+  if (contact?.email) {
+    lines.push(`EMAIL:${escapeVCardValue(contact.email)}`);
+  }
+  lines.push('END:VCARD');
+  return `${lines.join('\r\n')}\r\n`;
 }
 
 function normalizeLinkAttachment(input: any) {
@@ -1948,6 +1989,76 @@ export class KakaoForgeClient extends EventEmitter {
       cleanup,
     };
   }
+
+  async _uploadContactVCard(contact: ContactPayload, opts: AttachmentSendOptions = {}) {
+    if (!contact || !contact.name) {
+      throw new Error('연락처 전송에는 name이 필요합니다.');
+    }
+
+    let filePath = contact.filePath || '';
+    let cleanupTemp: (() => void) | null = null;
+    if (!filePath) {
+      const vcard = contact.vcard || buildVCard(contact);
+      const tempDir = os.tmpdir();
+      const safeName = contact.name.replace(/[\\/:*?"<>|]+/g, '_');
+      filePath = path.join(tempDir, `kakaoforge-contact-${Date.now()}-${safeName || 'contact'}.vcf`);
+      fs.writeFileSync(filePath, vcard, 'utf-8');
+      cleanupTemp = () => {
+        if ((opts as any).keepTemp) return;
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          // ignore
+        }
+      };
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      throw new Error(`file not found: ${filePath}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`not a file: ${filePath}`);
+    }
+
+    try {
+      const res = await uploadMultipartFile({
+        url: 'https://up-m.talk.kakao.com/upload',
+        filePath,
+        fieldName: 'attachment',
+        filename: path.basename(filePath),
+        mime: 'text/x-vcard',
+        fields: {
+          user_id: 0,
+          attachment_type: 'text/x-vcard',
+        },
+        headers: {
+          'Accept': '*/*',
+          'Accept-Language': this.lang || 'ko',
+          'User-Agent': buildUserAgent(this.appVer),
+        },
+        timeoutMs: opts.timeoutMs || 15000,
+      });
+
+      const bodyText = (res.body || '').trim();
+      const url = (res.json && (res.json.path || res.json.url))
+        ? String(res.json.path || res.json.url)
+        : bodyText;
+      if (!url) {
+        throw new Error(`contact upload failed: empty response`);
+      }
+
+      return {
+        name: contact.name,
+        url,
+        s: stat.size,
+      };
+    } finally {
+      if (cleanupTemp) cleanupTemp();
+    }
+  }
   async _uploadMedia(
     type: UploadMediaType,
     filePath: string,
@@ -2317,15 +2428,35 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   async sendContact(chatId: number | string, contact: ContactPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const normalized = normalizeContactAttachment(contact);
+    const unwrapped = unwrapAttachment(contact);
+    const normalized = normalizeContactAttachment(unwrapped);
     const fallbackText = typeof contact === 'string'
       ? contact
       : (contact && typeof contact === 'object' ? (contact as ContactPayload).name || '' : '');
+    if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
+      const contactUrl = (normalized as any).url || (normalized as any).path;
+      if (contactUrl) {
+        const attachment = normalizeContactAttachment({ ...(normalized as any), url: contactUrl });
+        return this._sendWithAttachment(
+          chatId,
+          MessageType.Contact,
+          opts.text || fallbackText || '',
+          attachment,
+          opts,
+          'contact'
+        );
+      }
+    }
+
+    const payload: ContactPayload = typeof contact === 'string'
+      ? { name: contact }
+      : (contact as ContactPayload);
+    const uploaded = await this._uploadContactVCard(payload, opts);
     return this._sendWithAttachment(
       chatId,
       MessageType.Contact,
       opts.text || fallbackText || '',
-      normalized,
+      uploaded,
       opts,
       'contact'
     );
