@@ -42,7 +42,7 @@ export type MessageEvent = {
   sender: {
     id: number | string;
     name: string;
-    type: MemberRole;
+    type: MemberType;
   };
   room: {
     id: number | string;
@@ -60,7 +60,7 @@ export type MessageEvent = {
   logId: number | string;
 };
 
-export type MemberRole = '방장' | '부방장' | '일반';
+export type MemberType = number;
 
 export type SendOptions = {
   msgId?: number;
@@ -327,7 +327,7 @@ export type ChatModule = {
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  type?: MemberRole;
+  type?: MemberType;
 };
 
 type ChatRoomInfo = {
@@ -1553,7 +1553,7 @@ export class KakaoForgeClient extends EventEmitter {
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
-  type: MemberRole;
+  type: MemberType;
   chat: ChatModule;
   autoReconnect: boolean;
   reconnectMinDelayMs: number;
@@ -1630,7 +1630,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     // Debug mode: log all raw events
     this.debug = config.debug || false;
-    this.type = '일반';
+    this.type = 0;
 
     this.autoReconnect = config.autoReconnect !== false;
     this.reconnectMinDelayMs = typeof config.reconnectMinDelayMs === 'number'
@@ -2320,7 +2320,7 @@ export class KakaoForgeClient extends EventEmitter {
     const msg = await this._buildMessageEvent(data);
     if (!msg) return;
 
-    const clientType = this._resolveMemberRole(msg.room.id, this.userId);
+    const clientType = this._resolveMemberType(msg.room.id, this.userId);
     this.type = clientType;
     this.chat.type = clientType;
 
@@ -2465,7 +2465,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
   }
-    const senderType = this._resolveMemberRole(roomIdValue, senderIdValue);
+    const senderType = this._resolveMemberType(roomIdValue, senderIdValue);
     const msg: MessageEvent = {
       message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,
@@ -2754,20 +2754,23 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   _getCachedMemberName(chatId: number | string, userId: number | string) {
-    const map = this._memberNames.get(String(chatId));
+    const resolvedChatId = this._resolveChatId(chatId);
+    const map = this._memberNames.get(String(resolvedChatId));
     if (!map) return '';
     return map.get(String(userId)) || '';
   }
 
   _getCachedMemberType(chatId: number | string, userId: number | string) {
-    const map = this._memberTypes.get(String(chatId));
+    const resolvedChatId = this._resolveChatId(chatId);
+    const map = this._memberTypes.get(String(resolvedChatId));
     if (!map) return null;
     const value = map.get(String(userId));
     return value === undefined ? null : value;
   }
 
   _getCachedMemberIds(chatId: number | string) {
-    const map = this._memberNames.get(String(chatId));
+    const resolvedChatId = this._resolveChatId(chatId);
+    const map = this._memberNames.get(String(resolvedChatId));
     if (!map) return [];
     return uniqueNumbers([...map.keys()].map((id) => Number(id)));
   }
@@ -2792,8 +2795,9 @@ export class KakaoForgeClient extends EventEmitter {
       if (!userId) continue;
       const name = this._extractMemberName(mem);
       map.set(String(userId), String(name || ''));
-      if (mem?.memberType !== undefined && mem?.memberType !== null) {
-        const parsed = safeNumber(mem.memberType, NaN);
+      const rawMemberType = mem?.memberType ?? mem?.linkMemberType;
+      if (rawMemberType !== undefined && rawMemberType !== null) {
+        const parsed = safeNumber(rawMemberType, NaN);
         if (!Number.isNaN(parsed)) {
           typeMap.set(String(userId), parsed);
         }
@@ -2816,11 +2820,9 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
-  _resolveMemberRole(chatId: number | string, userId: number | string): MemberRole {
+  _resolveMemberType(chatId: number | string, userId: number | string): MemberType {
     const memberType = this._getCachedMemberType(chatId, userId);
-    if (memberType === 1) return '방장';
-    if (memberType === 4) return '부방장';
-    return '일반';
+    return typeof memberType === 'number' ? memberType : 0;
   }
 
   async _fetchMemberName(chatId: number | string, userId: number | string) {
