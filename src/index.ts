@@ -1224,7 +1224,7 @@ function extractFeedPayload(chatLog: any, attachmentsRaw: any[]): any | null {
   return null;
 }
 
-function extractMemberIdsFromPayload(payload: any) {
+function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boolean } = {}) {
   const out: Array<number | string> = [];
   const seen = new Set<string>();
   const add = (value: any) => {
@@ -1247,7 +1247,10 @@ function extractMemberIdsFromPayload(payload: any) {
       add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid);
     }
   }
-  add(payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid ?? payload?.targetId);
+  const fallbackId = opts.excludeUserId
+    ? (payload?.memberId ?? payload?.mid ?? payload?.targetId)
+    : (payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid ?? payload?.targetId);
+  add(fallbackId);
   return out;
 }
 
@@ -2575,7 +2578,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (!roomId) return false;
 
     let resolvedAction = action;
-    let memberIds = extractMemberIdsFromPayload(body);
+    let memberIds = extractMemberIdsFromPayload(body, { excludeUserId: packet.method === 'DELMEM' });
     let nameMap = buildMemberNameMap(body);
     let actorId = extractActorIdFromPayload(body);
     let actorName = actorId ? nameMap.get(String(actorId)) : '';
@@ -2614,7 +2617,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    if (memberIds.length === 0 && chatLog?.authorId) {
+    if (memberIds.length === 0 && chatLog?.authorId && packet.method !== 'DELMEM') {
       memberIds = [normalizeIdValue(chatLog.authorId)];
     }
 
