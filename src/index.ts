@@ -2836,7 +2836,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (!userId) continue;
       const name = this._extractMemberName(mem);
       map.set(String(userId), String(name || ''));
-      const rawMemberType = mem?.userType ?? mem?.memberType ?? mem?.linkMemberType;
+      const rawMemberType = mem?.mt ?? mem?.ut ?? mem?.userType ?? mem?.memberType ?? mem?.linkMemberType;
       if (rawMemberType !== undefined && rawMemberType !== null) {
         const parsed = safeNumber(rawMemberType, NaN);
         if (!Number.isNaN(parsed)) {
