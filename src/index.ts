@@ -99,6 +99,23 @@ export type EditMessageOptions = {
   supplement?: string;
 };
 
+export type ForwardTarget = MessageEvent | {
+  text?: string;
+  msg?: string;
+  message?: string;
+  type?: number;
+  msgType?: number;
+  extra?: string | Record<string, any> | any[];
+  attachmentsRaw?: any[];
+  raw?: any;
+  chatLog?: any;
+};
+
+export type ForwardOptions = {
+  msgId?: number;
+  noSeen?: boolean;
+};
+
 export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
 
 export type AttachmentSendOptions = SendOptions & UploadOptions & {
@@ -283,6 +300,7 @@ export type ChatModule = {
   sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
   sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
+  forwardMessage: (chatId: number | string, target: ForwardTarget, opts?: ForwardOptions) => Promise<any>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1197,6 +1215,32 @@ function normalizeEditTarget(input: any): { logId: number | string; type?: numbe
   return { logId, type, extra };
 }
 
+function normalizeForwardTarget(input: any): { msg: string; type: number; extra: string } | null {
+  if (!input) return null;
+  const hasMessageEvent = !!input.message && typeof input.message === 'object';
+  const rawLog = hasMessageEvent
+    ? (input.raw?.chatLog ?? input.raw ?? null)
+    : (input.chatLog ?? input.raw?.chatLog ?? input.raw ?? null);
+  const innerLog = rawLog?.chatLog ?? rawLog ?? {};
+
+  const msgSource = hasMessageEvent
+    ? (input.message?.text ?? input.text ?? innerLog?.message ?? innerLog?.msg ?? innerLog?.text ?? '')
+    : (input.text ?? input.msg ?? input.message ?? innerLog?.message ?? innerLog?.msg ?? innerLog?.text ?? '');
+  const msg = typeof msgSource === 'string' ? msgSource : String(msgSource ?? '');
+
+  const typeSource = hasMessageEvent
+    ? (input.message?.type ?? input.type ?? innerLog?.type ?? innerLog?.msgType ?? MessageType.Text)
+    : (input.type ?? input.msgType ?? innerLog?.type ?? innerLog?.msgType ?? MessageType.Text);
+  const type = safeNumber(typeSource, MessageType.Text);
+
+  const extraSource = hasMessageEvent
+    ? (innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw)
+    : (input.extra ?? innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw);
+  const extra = buildExtra(extraSource) ?? '';
+
+  return { msg, type, extra };
+}
+
 function pickFirstValue<T>(...values: T[]): T | undefined {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') {
@@ -1519,6 +1563,7 @@ export class KakaoForgeClient extends EventEmitter {
       sendReply: (chatId, text, replyTo, opts) => this.sendReply(chatId, text, replyTo, opts),
       sendThreadReply: (chatId, threadId, text, opts) => this.sendThreadReply(chatId, threadId, text, opts),
       sendReaction: (chatId, target, reactionType, opts) => this.sendReaction(chatId, target, reactionType, opts),
+      forwardMessage: (chatId, target, opts) => this.forwardMessage(chatId, target, opts),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
@@ -2836,6 +2881,45 @@ export class KakaoForgeClient extends EventEmitter {
       extra,
       supplement: opts.supplement,
     });
+  }
+
+  /**
+   * Forward a message (LOCO FORWARD).
+   */
+  async forwardMessage(chatId: number | string, target: ForwardTarget, opts: ForwardOptions = {}) {
+    const normalized = normalizeForwardTarget(target);
+    if (!normalized) {
+      throw new Error('forwardMessage requires a MessageEvent or content payload');
+    }
+
+    const msgId = opts.msgId !== undefined && opts.msgId !== null
+      ? opts.msgId
+      : this._nextClientMsgId();
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    return await this._carriage.forward(
+      resolvedChatId,
+      msgId,
+      normalized.type,
+      normalized.extra,
+      normalized.msg,
+      { noSeen: opts.noSeen }
+    );
   }
 
   async _ensureVideoConf() {
