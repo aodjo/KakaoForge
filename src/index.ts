@@ -1,7 +1,9 @@
 ﻿import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import * as crypto from 'crypto';
+import { spawn, spawnSync } from 'child_process';
 import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
@@ -59,6 +61,21 @@ export type AttachmentSendOptions = SendOptions & UploadOptions & {
   text?: string;
 };
 
+
+
+export type VideoQuality = 'low' | 'high';
+
+export type VideoTranscodeOptions = {
+  transcode?: boolean;
+  videoQuality?: VideoQuality;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  tempDir?: string;
+  keepTemp?: boolean;
+  videoBitrate?: number;
+  videoResolution?: number;
+};
+
 export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file';
 
 export type UploadOptions = {
@@ -81,6 +98,14 @@ export type UploadOptions = {
   timeoutMs?: number;
   onProgress?: (sent: number, total: number) => void;
   auth?: boolean;
+  transcode?: boolean;
+  videoQuality?: VideoQuality;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  tempDir?: string;
+  keepTemp?: boolean;
+  videoBitrate?: number;
+  videoResolution?: number;
 };
 
 export type UploadResult = {
@@ -163,6 +188,10 @@ export type KakaoForgeConfig = {
   networkType?: number;
   refreshToken?: string;
   debug?: boolean;
+  videoQuality?: VideoQuality;
+  transcodeVideos?: boolean;
+  ffmpegPath?: string;
+  ffprobePath?: string;
 };
 
 type AuthFile = {
@@ -252,6 +281,133 @@ async function sha1FileHex(filePath: string) {
     stream.on('data', (chunk) => hash.update(chunk));
     stream.on('error', (err) => reject(err));
     stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+type VideoProbe = {
+  width: number;
+  height: number;
+  bitrate: number;
+  duration: number;
+  rotation: number;
+};
+
+function resolveFfmpegBinary(name: 'ffmpeg' | 'ffprobe', opts: { ffmpegPath?: string; ffprobePath?: string } = {}) {
+  const envFfmpeg = process.env.KAKAOFORGE_FFMPEG_PATH || process.env.FFMPEG_PATH || '';
+  const envFfprobe = process.env.KAKAOFORGE_FFPROBE_PATH || process.env.FFPROBE_PATH || '';
+  if (name === 'ffmpeg') {
+    return opts.ffmpegPath || envFfmpeg || 'ffmpeg';
+  }
+  const direct = opts.ffprobePath || envFfprobe;
+  if (direct) return direct;
+  const ffmpegPath = opts.ffmpegPath || envFfmpeg;
+  if (ffmpegPath) {
+    const ext = path.extname(ffmpegPath);
+    const probeName = ext ? `ffprobe${ext}` : 'ffprobe';
+    return path.join(path.dirname(ffmpegPath), probeName);
+  }
+  return 'ffprobe';
+}
+
+function assertBinaryAvailable(binPath: string, label: string) {
+  const res = spawnSync(binPath, ['-version'], { windowsHide: true, stdio: 'ignore' });
+  if (res.error || res.status !== 0) {
+    throw new Error(`${label} not found. Install ffmpeg and ensure it is in PATH, or pass ${label.toLowerCase()}Path.`);
+  }
+}
+
+function probeVideo(filePath: string, ffprobePath: string): VideoProbe {
+  const res = spawnSync(ffprobePath, [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height,bit_rate,rotation,codec_type,codec_name:format=duration,bit_rate',
+    '-of', 'json',
+    filePath,
+  ], { windowsHide: true, encoding: 'utf8' });
+  if (res.error || res.status !== 0) {
+    const errMsg = res.stderr ? String(res.stderr).trim() : 'ffprobe failed';
+    throw new Error(`ffprobe failed: ${errMsg}`);
+  }
+  let data: any = {};
+  try {
+    data = JSON.parse(res.stdout || '{}');
+  } catch {
+    data = {};
+  }
+  const stream = Array.isArray(data.streams)
+    ? data.streams.find((s) => s && s.codec_type === 'video')
+    : null;
+  const width = Number(stream?.width || 0);
+  const height = Number(stream?.height || 0);
+  const rotation = Number(stream?.rotation ?? stream?.tags?.rotate ?? 0);
+  const streamBitrate = Number(stream?.bit_rate || 0);
+  const formatBitrate = Number(data.format?.bit_rate || 0);
+  const bitrate = Number.isFinite(streamBitrate) && streamBitrate > 0
+    ? streamBitrate
+    : (Number.isFinite(formatBitrate) ? formatBitrate : 0);
+  const duration = Number(data.format?.duration || 0);
+  return {
+    width: Number.isFinite(width) ? width : 0,
+    height: Number.isFinite(height) ? height : 0,
+    bitrate: Number.isFinite(bitrate) ? bitrate : 0,
+    duration: Number.isFinite(duration) ? duration : 0,
+    rotation: Number.isFinite(rotation) ? rotation : 0,
+  };
+}
+
+function toEven(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 2;
+  const floored = Math.floor(value);
+  return floored % 2 === 0 ? floored : floored - 1;
+}
+
+function computeTargetVideoSize(meta: VideoProbe, resolution: number) {
+  let width = meta.width;
+  let height = meta.height;
+  if (meta.rotation === 90 || meta.rotation === 270) {
+    width = meta.height;
+    height = meta.width;
+  }
+  if (resolution && resolution > 0) {
+    const shortSide = Math.min(width, height);
+    if (shortSide >= resolution + 1) {
+      const scale = resolution / shortSide;
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+  }
+  return { width: toEven(width), height: toEven(height) };
+}
+
+function defaultVideoProfile(quality: VideoQuality) {
+  return quality === 'high'
+    ? { bitrate: 4000000, resolution: 1080 }
+    : { bitrate: 2000000, resolution: 720 };
+}
+
+function runProcess(binPath: string, args: string[], timeoutMs = 0): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(binPath, args, { windowsHide: true });
+    const stderr: Buffer[] = [];
+    const timer = timeoutMs && timeoutMs > 0
+      ? setTimeout(() => {
+          proc.kill();
+          reject(new Error(`${binPath} timed out`));
+        }, timeoutMs)
+      : null;
+    proc.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+    proc.on('error', (err) => {
+      if (timer) clearTimeout(timer);
+      reject(err);
+    });
+    proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) {
+        resolve();
+      } else {
+        const message = Buffer.concat(stderr).toString('utf8').trim();
+        reject(new Error(message || `${binPath} failed with code ${code}`));
+      }
+    });
   });
 }
 
@@ -612,6 +768,11 @@ export class KakaoForgeClient extends EventEmitter {
   memberLookupTimeoutMs: number;
   pingIntervalMs: number;
   socketKeepAliveMs: number;
+  videoQuality: VideoQuality;
+  transcodeVideos: boolean;
+  ffmpegPath: string;
+  ffprobePath: string;
+  _conf: any;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -687,6 +848,12 @@ export class KakaoForgeClient extends EventEmitter {
     this.socketKeepAliveMs = typeof config.socketKeepAliveMs === 'number'
       ? config.socketKeepAliveMs
       : 30000;
+
+    this.videoQuality = config.videoQuality || 'high';
+    this.transcodeVideos = config.transcodeVideos !== false;
+    this.ffmpegPath = config.ffmpegPath || '';
+    this.ffprobePath = config.ffprobePath || '';
+    this._conf = null;
 
     // LOCO clients
     this._booking = null;
@@ -918,6 +1085,7 @@ export class KakaoForgeClient extends EventEmitter {
           os: this.os,
           mccmnc: this.mccmnc,
         });
+        this._conf = conf;
         const ticketHosts = [
           ...(conf.ticket?.lsl || []),
           ...(conf.ticket?.lsl6 || []),
@@ -1631,6 +1799,96 @@ export class KakaoForgeClient extends EventEmitter {
     return await this._carriage.write(chatId, text, msgType, writeOpts);
   }
 
+  _getVideoProfile(quality: VideoQuality) {
+    const conf = this._conf || {};
+    const trailerInfo = conf.trailerInfo || {};
+    const trailerHighInfo = conf.trailerHighInfo || {};
+    const base = quality === 'high'
+      ? (Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo)
+      : trailerInfo;
+    const fallback = defaultVideoProfile(quality);
+    const bitrate = Number(base?.videoTranscodingBitrate || 0) || fallback.bitrate;
+    const resolution = Number(base?.videoTranscodingResolution || 0) || fallback.resolution;
+    return { bitrate, resolution };
+  }
+
+  async _transcodeVideo(filePath: string, opts: UploadOptions = {}) {
+    const ffmpegPath = resolveFfmpegBinary('ffmpeg', {
+      ffmpegPath: opts.ffmpegPath || this.ffmpegPath,
+      ffprobePath: opts.ffprobePath || this.ffprobePath,
+    });
+    const ffprobePath = resolveFfmpegBinary('ffprobe', {
+      ffmpegPath: opts.ffmpegPath || this.ffmpegPath,
+      ffprobePath: opts.ffprobePath || this.ffprobePath,
+    });
+    assertBinaryAvailable(ffmpegPath, 'ffmpeg');
+    assertBinaryAvailable(ffprobePath, 'ffprobe');
+
+    const meta = probeVideo(filePath, ffprobePath);
+    if (!meta.width || !meta.height) {
+      throw new Error('ffprobe failed: no video stream');
+    }
+
+    const quality: VideoQuality = opts.videoQuality || this.videoQuality || 'high';
+    const profile = this._getVideoProfile(quality);
+    const resolution = Number(opts.videoResolution) > 0 ? Number(opts.videoResolution) : profile.resolution;
+    const targetSize = computeTargetVideoSize(meta, resolution);
+
+    const fallbackProfile = defaultVideoProfile(quality);
+    const targetBitrate = Number(opts.videoBitrate) > 0
+      ? Number(opts.videoBitrate)
+      : (profile.bitrate > 0 ? profile.bitrate : fallbackProfile.bitrate);
+    const sourceBitrate = meta.bitrate > 0 ? meta.bitrate : 0;
+    const finalBitrate = sourceBitrate > 0 ? Math.min(sourceBitrate, targetBitrate) : targetBitrate;
+    const bitrateK = Math.max(128, Math.round(finalBitrate / 1000));
+
+    const tempDir = opts.tempDir || os.tmpdir();
+    const outputPath = path.join(
+      tempDir,
+      `kakaoforge-video-${Date.now()}-${Math.random().toString(16).slice(2)}.mp4`
+    );
+
+    const codec = quality === 'high' ? 'libx265' : 'libx264';
+    const args = [
+      '-y',
+      '-i', filePath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-c:v', codec,
+      '-pix_fmt', 'yuv420p',
+      '-vf', `scale=${targetSize.width}:${targetSize.height}:flags=lanczos,setsar=1`,
+      '-r', '30',
+      '-b:v', `${bitrateK}k`,
+      '-maxrate', `${bitrateK}k`,
+      '-bufsize', `${bitrateK * 2}k`,
+      '-preset', 'medium',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-ar', '44100',
+      '-ac', '2',
+      '-movflags', '+faststart',
+      outputPath,
+    ];
+
+    await runProcess(ffmpegPath, args, opts.timeoutMs || 0);
+
+    const cleanup = () => {
+      if (opts.keepTemp) return;
+      try {
+        fs.unlinkSync(outputPath);
+      } catch {
+        // ignore
+      }
+    };
+
+    return {
+      path: outputPath,
+      width: targetSize.width,
+      height: targetSize.height,
+      duration: meta.duration > 0 ? Math.round(meta.duration * 1000) : undefined,
+      cleanup,
+    };
+  }
   async _uploadMedia(
     type: UploadMediaType,
     filePath: string,
@@ -1641,15 +1899,31 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('filePath is required');
     }
 
-    let stat: fs.Stats;
+    let cleanupTemp: (() => void) | null = null;
+    if (type === 'video' && (opts.transcode ?? this.transcodeVideos)) {
+      const transcode = await this._transcodeVideo(filePath, opts);
+      filePath = transcode.path;
+      cleanupTemp = transcode.cleanup;
+      opts = {
+        ...opts,
+        mime: opts.mime || 'video/mp4',
+        width: transcode.width ?? opts.width,
+        height: transcode.height ?? opts.height,
+        duration: transcode.duration ?? opts.duration,
+      };
+    }
+
+    let result: UploadResult;
     try {
-      stat = fs.statSync(filePath);
-    } catch (err) {
-      throw new Error(`file not found: ${filePath}`);
-    }
-    if (!stat.isFile()) {
-      throw new Error(`not a file: ${filePath}`);
-    }
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch (err) {
+        throw new Error(`file not found: ${filePath}`);
+      }
+      if (!stat.isFile()) {
+        throw new Error(`not a file: ${filePath}`);
+      }
 
     const uploadChatId = chatId ?? opts.chatId;
     if (!uploadChatId) {
@@ -1839,15 +2113,20 @@ export class KakaoForgeClient extends EventEmitter {
 
     const completeBody = completePacket?.body || {};
 
-    return {
-      accessKey: String(token),
-      attachment,
-      msgId,
-      info: { ship: shipBodyRes, post: postRes?.body, complete: completeBody },
-      raw: { ship: shipRes, post: postRes, complete: completePacket },
-      chatLog: completeBody.chatLog,
-      complete: completeBody,
-    };
+      result = {
+        accessKey: String(token),
+        attachment,
+        msgId,
+        info: { ship: shipBodyRes, post: postRes?.body, complete: completeBody },
+        raw: { ship: shipRes, post: postRes, complete: completePacket },
+        chatLog: completeBody.chatLog,
+        complete: completeBody,
+      };
+    } finally {
+      if (cleanupTemp) cleanupTemp();
+    }
+
+    return result;
   }
 
   async uploadPhoto(filePath: string, opts: UploadOptions = {}) {
@@ -2325,3 +2604,23 @@ export { MessageType } from './types/message';
 
 export type { MessageTypeValue } from './types/message';
 export type KakaoBot = KakaoForgeClient;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

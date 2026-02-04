@@ -20,6 +20,30 @@ function normalizePortList(list: any[]) {
   return [...new Set(ports)];
 }
 
+function normalizeTrailerInfo(raw: any = {}) {
+  const info = raw || {};
+  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0);
+  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0);
+  const videoUpMaxSize = Number(info.videoUpMaxSize ?? info.video_up_max_size ?? 0);
+  return {
+    ...info,
+    videoTranscodingBitrate: Number.isFinite(bitrate) ? bitrate : 0,
+    videoTranscodingResolution: Number.isFinite(resolution) ? resolution : 0,
+    videoUpMaxSize: Number.isFinite(videoUpMaxSize) ? videoUpMaxSize : 0,
+  };
+}
+
+function normalizeTrailerHighInfo(raw: any = {}) {
+  const info = raw || {};
+  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0);
+  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0);
+  return {
+    ...info,
+    videoTranscodingBitrate: Number.isFinite(bitrate) ? bitrate : 0,
+    videoTranscodingResolution: Number.isFinite(resolution) ? resolution : 0,
+  };
+}
+
 function normalizeGetConf(body: any = {}) {
   const ticket = body.ticket || body.ticketInfo || body.TicketInfo || {};
   const lsl = normalizeStringList(ticket.lsl);
@@ -31,12 +55,17 @@ function normalizeGetConf(body: any = {}) {
   const portsWifi = normalizePortList(wifi.ports);
   const portsCellular = normalizePortList(cell.ports);
 
+  const trailerInfoRaw = body.trailerInfo || body.trailer_info || body.TrailerInfo || body.trailer || {};
+  const trailerHighInfoRaw = body.trailerHighInfo || body.trailer_high_info || body.TrailerHighInfo || {};
+
   return {
     revision: typeof body.revision === 'number' ? body.revision : 0,
     ticket: { lsl, lsl6 },
     connInfo: { wifi, cellular: cell },
     portsWifi,
     portsCellular,
+    trailerInfo: normalizeTrailerInfo(trailerInfoRaw),
+    trailerHighInfo: normalizeTrailerHighInfo(trailerHighInfoRaw),
     raw: body,
   };
 }
