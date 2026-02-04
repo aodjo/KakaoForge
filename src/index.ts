@@ -42,6 +42,7 @@ export type MessageEvent = {
   sender: {
     id: number | string;
     name: string;
+    type: MemberRole;
   };
   room: {
     id: number | string;
@@ -58,6 +59,8 @@ export type MessageEvent = {
   type: number;
   logId: number | string;
 };
+
+export type MemberRole = '방장' | '부방장' | '일반';
 
 export type SendOptions = {
   msgId?: number;
@@ -324,6 +327,7 @@ export type ChatModule = {
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  type?: MemberRole;
 };
 
 type ChatRoomInfo = {
@@ -1549,6 +1553,7 @@ export class KakaoForgeClient extends EventEmitter {
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
+  type: MemberRole;
   chat: ChatModule;
   autoReconnect: boolean;
   reconnectMinDelayMs: number;
@@ -1582,6 +1587,7 @@ export class KakaoForgeClient extends EventEmitter {
   _openLinkSyncToken: number;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
+  _memberTypes: Map<string, Map<string, number>>;
   _memberFetchInFlight: Map<string, Promise<void>>;
   _memberListFetchInFlight: Map<string, Promise<void>>;
   _memberCacheUpdatedAt: Map<string, number>;
@@ -1624,6 +1630,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     // Debug mode: log all raw events
     this.debug = config.debug || false;
+    this.type = '일반';
 
     this.autoReconnect = config.autoReconnect !== false;
     this.reconnectMinDelayMs = typeof config.reconnectMinDelayMs === 'number'
@@ -1675,6 +1682,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._openLinkSyncToken = 0;
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
+    this._memberTypes = new Map();
     this._memberFetchInFlight = new Map();
     this._memberListFetchInFlight = new Map();
     this._memberCacheUpdatedAt = new Map();
@@ -2312,6 +2320,10 @@ export class KakaoForgeClient extends EventEmitter {
     const msg = await this._buildMessageEvent(data);
     if (!msg) return;
 
+    const clientType = this._resolveMemberRole(msg.room.id, this.userId, msg.room.isOpenChat);
+    this.type = clientType;
+    this.chat.type = clientType;
+
     if (this._messageHandler) {
       if (this._messageHandler.length <= 1) {
         (this._messageHandler as (msg: MessageEvent) => void)(msg);
@@ -2445,18 +2457,19 @@ export class KakaoForgeClient extends EventEmitter {
           }
         }
       }
-      if (!roomName && !flags.isOpenChat) {
-        const derived = this._buildRoomNameFromMembers(String(roomIdValue));
-        if (derived) {
-          roomName = derived;
-          this._chatRooms.set(String(roomIdValue), { ...refreshed, roomName });
-        }
+    if (!roomName && !flags.isOpenChat) {
+      const derived = this._buildRoomNameFromMembers(String(roomIdValue));
+      if (derived) {
+        roomName = derived;
+        this._chatRooms.set(String(roomIdValue), { ...refreshed, roomName });
       }
     }
+  }
+    const senderType = this._resolveMemberRole(roomIdValue, senderIdValue, flags.isOpenChat);
     const msg: MessageEvent = {
       message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,
-      sender: { id: senderIdValue, name: senderName },
+      sender: { id: senderIdValue, name: senderName, type: senderType },
       room: {
         id: roomIdValue,
         name: roomName,
@@ -2746,6 +2759,13 @@ export class KakaoForgeClient extends EventEmitter {
     return map.get(String(userId)) || '';
   }
 
+  _getCachedMemberType(chatId: number | string, userId: number | string) {
+    const map = this._memberTypes.get(String(chatId));
+    if (!map) return null;
+    const value = map.get(String(userId));
+    return value === undefined ? null : value;
+  }
+
   _getCachedMemberIds(chatId: number | string) {
     const map = this._memberNames.get(String(chatId));
     if (!map) return [];
@@ -2766,14 +2786,24 @@ export class KakaoForgeClient extends EventEmitter {
     if (!Array.isArray(members)) return;
     const key = String(chatId);
     const map = this._memberNames.get(key) || new Map<string, string>();
+    const typeMap = this._memberTypes.get(key) || new Map<string, number>();
     for (const mem of members) {
       const userId = normalizeIdValue(mem?.userId || mem?.id || mem?.memberId || mem?.user_id || 0);
       if (!userId) continue;
       const name = this._extractMemberName(mem);
       map.set(String(userId), String(name || ''));
+      if (mem?.memberType !== undefined && mem?.memberType !== null) {
+        const parsed = safeNumber(mem.memberType, NaN);
+        if (!Number.isNaN(parsed)) {
+          typeMap.set(String(userId), parsed);
+        }
+      }
     }
     if (map.size > 0) {
       this._memberNames.set(key, map);
+    }
+    if (typeMap.size > 0) {
+      this._memberTypes.set(key, typeMap);
     }
     this._touchMemberCache(chatId);
 
@@ -2784,6 +2814,14 @@ export class KakaoForgeClient extends EventEmitter {
         this._chatRooms.set(key, { ...room, roomName: derived });
       }
     }
+  }
+
+  _resolveMemberRole(chatId: number | string, userId: number | string, isOpenChat: boolean): MemberRole {
+    if (!isOpenChat) return '일반';
+    const memberType = this._getCachedMemberType(chatId, userId);
+    if (memberType === 1) return '방장';
+    if (memberType === 4) return '부방장';
+    return '일반';
   }
 
   async _fetchMemberName(chatId: number | string, userId: number | string) {
