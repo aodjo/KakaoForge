@@ -847,6 +847,19 @@ function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
 function normalizeReplyTarget(input: any): ReplyTarget | null {
   if (!input) return null;
 
+  if (input.raw && input.raw.chatLog) {
+    const chatLog = input.raw.chatLog;
+    const logId = normalizeIdValue(chatLog.logId || chatLog.msgId || input.logId || input.message?.id || 0);
+    const userId = normalizeIdValue(
+      chatLog.authorId || chatLog.senderId || chatLog.userId || input.sender?.id || input.senderId || 0
+    );
+    const text = chatLog.message || chatLog.msg || chatLog.text || input.message?.text || input.text || '';
+    const type = safeNumber(chatLog.type || chatLog.msgType || input.message?.type || input.type || MessageType.Text, MessageType.Text);
+    const mentions = extractMentions(chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? input.attachmentsRaw);
+    const linkId = chatLog.linkId || chatLog.src_linkId || input.linkId || input.src_linkId;
+    return { logId, userId, text, type, mentions, linkId };
+  }
+
   if (input.message && input.sender) {
     const message = input.message || {};
     const sender = input.sender || {};
