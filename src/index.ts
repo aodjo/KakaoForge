@@ -80,6 +80,7 @@ export type ReplyTarget = {
   text?: string;
   type?: number;
   linkId?: number | string;
+  isOpenChat?: boolean;
   mentions?: any[];
 };
 
@@ -599,6 +600,24 @@ function parseAttachments(raw: any): any[] {
   return [];
 }
 
+function extractOpenLinkIdFromRaw(raw: any): number | string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  if (raw.li !== undefined && raw.li !== null && raw.li !== '') {
+    return normalizeIdValue(raw.li);
+  }
+  const chatLog = raw.chatLog;
+  if (chatLog && typeof chatLog === 'object') {
+    if (chatLog.li !== undefined && chatLog.li !== null && chatLog.li !== '') {
+      return normalizeIdValue(chatLog.li);
+    }
+    const nested = chatLog.chatLog;
+    if (nested && typeof nested === 'object' && nested.li !== undefined && nested.li !== null && nested.li !== '') {
+      return normalizeIdValue(nested.li);
+    }
+  }
+  return undefined;
+}
+
 function resolveRoomFlags(source: any) {
   const typeRaw = source?.type ?? source?.t ?? source?.chatType ?? '';
   const typeName = String(typeRaw).toLowerCase();
@@ -1059,13 +1078,17 @@ function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
   if (!target || !target.logId || !target.userId) {
     throw new Error('reply target requires logId and userId');
   }
+  const linkIdValue = target.linkId ?? 0;
+  if (target.isOpenChat && (!linkIdValue || linkIdValue === 0 || linkIdValue === '0')) {
+    throw new Error('open chat reply requires openLinkId');
+  }
   const srcMessage = truncateReplyMessage(target.text || '');
   const attachment: any = {
     src_logId: toLong(target.logId),
     src_userId: toLong(target.userId),
     src_message: srcMessage,
     src_type: typeof target.type === 'number' ? target.type : MessageType.Text,
-    src_linkId: toLong(target.linkId ?? 0),
+    src_linkId: toLong(linkIdValue),
     src_mentions: Array.isArray(target.mentions) ? target.mentions : [],
     mentions: null,
     attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
@@ -1109,14 +1132,16 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
         rawLog.extra ??
         input.attachmentsRaw
     );
-    const linkId = input.raw?.li ?? rawLog?.li ?? inner?.li ?? input.room?.openLinkId;
-    return { logId, userId, text, type, mentions, linkId };
+    const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
+    const isOpenChat = input.room?.isOpenChat === true || !!linkId;
+    return { logId, userId, text, type, mentions, linkId, isOpenChat };
   }
 
   if (input.message && input.sender) {
     const message = input.message || {};
     const sender = input.sender || {};
-    const linkId = input.raw?.li ?? input.room?.openLinkId;
+    const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
+    const isOpenChat = input.room?.isOpenChat === true || !!linkId;
     return {
       logId: normalizeIdValue(message.logId || message.id || input.logId || 0),
       userId: normalizeIdValue(sender.id || input.senderId || 0),
@@ -1124,6 +1149,7 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
       type: safeNumber(message.type || input.type || MessageType.Text, MessageType.Text),
       mentions: extractMentions(input.attachmentsRaw),
       linkId,
+      isOpenChat,
     };
   }
 
@@ -1134,9 +1160,10 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
   const text = input.message || input.text || input.msg || '';
   const type = safeNumber(input.type || input.msgType || MessageType.Text, MessageType.Text);
   const mentions = input.mentions || input.src_mentions || extractMentions(input.attachmentsRaw);
-  const linkId = input.raw?.li ?? input.room?.openLinkId;
+  const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
+  const isOpenChat = input.room?.isOpenChat === true || !!linkId;
 
-  return { logId, userId, text, type, mentions, linkId };
+  return { logId, userId, text, type, mentions, linkId, isOpenChat };
 }
 
 function normalizeReactionTarget(input: any): { logId: number | string; linkId?: number | string; isOpenChat?: boolean } | null {
@@ -1158,7 +1185,7 @@ function normalizeReactionTarget(input: any): { logId: number | string; linkId?:
       input.raw?.chatLog?.logId ||
       0
   );
-  const linkId = input.linkId ?? message?.linkId ?? input.raw?.li ?? input.raw?.chatLog?.li ?? input.room?.openLinkId;
+  const linkId = input.linkId ?? message?.linkId ?? extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
   const isOpenChat = input.room?.isOpenChat;
 
   return { logId, linkId, isOpenChat };
@@ -2243,10 +2270,8 @@ export class KakaoForgeClient extends EventEmitter {
 
     let flags = initialFlags;
     const openLinkIdValue = normalizeIdValue(
-      data.li ||
+      extractOpenLinkIdFromRaw(data) ||
         data.openLinkId ||
-        chatLog.li ||
-        chatLog.linkId ||
         roomInfo.openLinkId ||
         0
     );
