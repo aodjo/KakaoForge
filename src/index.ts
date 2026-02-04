@@ -1236,7 +1236,10 @@ function normalizeForwardTarget(input: any): { msg: string; type: number; extra:
   const extraSource = hasMessageEvent
     ? (innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw)
     : (input.extra ?? innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw);
-  const extra = buildExtra(extraSource) ?? '';
+  let extra = buildExtra(extraSource);
+  if (!extra) {
+    extra = '{}';
+  }
 
   return { msg, type, extra };
 }
