@@ -3003,6 +3003,37 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
   }
+    const hasExplicitTitle = Boolean(data?.title || data?.roomName || data?.chatRoomName);
+    if (roomIdValue) {
+      const key = String(roomIdValue);
+      const prevRoom = this._chatRooms.get(key) || {};
+      const nextRoom: ChatRoomInfo = { ...prevRoom };
+      let changed = false;
+      if (roomName && (!nextRoom.roomName || nextRoom.needsTitle)) {
+        nextRoom.roomName = roomName;
+        changed = true;
+      }
+      if (roomName && (flags.isOpenChat || hasExplicitTitle) && (!nextRoom.title || nextRoom.needsTitle)) {
+        nextRoom.title = roomName;
+        if (nextRoom.needsTitle) nextRoom.needsTitle = false;
+        changed = true;
+      }
+      if (flags.isOpenChat && nextRoom.isOpenChat !== true) {
+        nextRoom.isOpenChat = true;
+        changed = true;
+      }
+      if (flags.isGroupChat && nextRoom.isGroupChat !== true) {
+        nextRoom.isGroupChat = true;
+        changed = true;
+      }
+      if (openLinkIdValue && !nextRoom.openLinkId) {
+        nextRoom.openLinkId = openLinkIdValue;
+        changed = true;
+      }
+      if (changed) {
+        this._chatRooms.set(key, nextRoom);
+      }
+    }
     const senderType = this._resolveMemberType(roomIdValue, senderIdValue);
     const msg: MessageEvent = {
       message: { id: logIdValue, text, type, logId: logIdValue },
