@@ -77,7 +77,7 @@ export type VideoTranscodeOptions = {
   videoResolution?: number;
 };
 
-export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file' | 'contact';
+export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file';
 
 export type UploadOptions = {
   chatId?: number | string;
@@ -2028,8 +2028,46 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     try {
-      const uploadResult = await this._uploadMedia('contact', filePath, opts, chatId);
-      return uploadResult;
+      const res = await uploadMultipartFile({
+        url: 'https://up-m.talk.kakao.com/upload',
+        filePath,
+        fieldName: 'attachment',
+        filename: path.basename(filePath),
+        mime: 'text/x-vcard',
+        fields: {
+          user_id: 0,
+          attachment_type: 'text/x-vcard',
+        },
+        headers: {
+          'Accept': '*/*',
+          'Accept-Language': this.lang || 'ko',
+          'User-Agent': buildUserAgent(this.appVer),
+        },
+        timeoutMs: opts.timeoutMs || 15000,
+      });
+
+      const bodyText = (res.body || '').trim();
+      let rawPath = '';
+      if (res.json && typeof res.json === 'object') {
+        rawPath = String((res.json as any).path || (res.json as any).url || '');
+      } else if (typeof res.json === 'string') {
+        rawPath = res.json;
+      } else {
+        rawPath = bodyText;
+      }
+      rawPath = rawPath.trim();
+      if (rawPath.startsWith('"') && rawPath.endsWith('"') && rawPath.length >= 2) {
+        rawPath = rawPath.slice(1, -1);
+      }
+      if (!rawPath) {
+        throw new Error(`contact upload failed: empty response`);
+      }
+      const key = rawPath.startsWith('/') ? rawPath.slice(1) : rawPath;
+      return {
+        name: contact.name,
+        k: key,
+        s: stat.size,
+      };
     } finally {
       if (cleanupTemp) cleanupTemp();
     }
@@ -2098,9 +2136,7 @@ export class KakaoForgeClient extends EventEmitter {
         ? MessageType.Video
         : type === 'audio'
           ? MessageType.Audio
-          : type === 'contact'
-            ? MessageType.Contact
-            : MessageType.File;
+          : MessageType.File;
 
     const fallbackMime = type === 'photo'
       ? 'image/jpeg'
@@ -2108,9 +2144,7 @@ export class KakaoForgeClient extends EventEmitter {
         ? 'video/mp4'
         : type === 'audio'
           ? 'audio/mpeg'
-          : type === 'contact'
-            ? 'text/x-vcard'
-            : 'application/octet-stream';
+          : 'application/octet-stream';
     const mime = opts.mime || guessMime(filePath, fallbackMime);
 
     let width = opts.width;
@@ -2242,13 +2276,6 @@ export class KakaoForgeClient extends EventEmitter {
       } else {
         const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
         throw new Error(`UPLOAD POST missing video token: ${preview}`);
-      }
-    } else if (type === 'contact') {
-      if (completeAttachment) {
-        attachment = normalizeMediaAttachment(completeAttachment) || {};
-        if (!attachment.k && shipKey) attachment.k = shipKey;
-      } else {
-        attachment.k = shipKey;
       }
     } else {
       attachment.k = shipKey;
@@ -2423,12 +2450,11 @@ export class KakaoForgeClient extends EventEmitter {
       const contactUrl = (normalized as any).url || (normalized as any).path;
       if (contactUrl) {
         const attachment = normalizeContactAttachment({ ...(normalized as any), url: contactUrl });
-        const attachmentPayload = Array.isArray(attachment) ? attachment : [attachment];
         return this._sendWithAttachment(
           chatId,
           MessageType.Contact,
           opts.text || fallbackText || '',
-          attachmentPayload,
+          attachment,
           opts,
           'contact'
         );
@@ -2443,12 +2469,11 @@ export class KakaoForgeClient extends EventEmitter {
       ...unwrapAttachment(uploaded),
       name: payload.name,
     });
-    const attachmentPayload = Array.isArray(uploadedAttachment) ? uploadedAttachment : [uploadedAttachment];
     return this._sendWithAttachment(
       chatId,
       MessageType.Contact,
       opts.text || fallbackText || '',
-      attachmentPayload,
+      uploadedAttachment,
       opts,
       'contact'
     );
