@@ -188,6 +188,7 @@ export type KakaoForgeConfig = {
   networkType?: number;
   refreshToken?: string;
   debug?: boolean;
+  debugGetConf?: boolean;
   videoQuality?: VideoQuality;
   transcodeVideos?: boolean;
   ffmpegPath?: string;
@@ -412,6 +413,23 @@ function hasTrailerProfile(conf: any) {
   const bitrate = Number(base?.videoTranscodingBitrate || 0);
   const resolution = Number(base?.videoTranscodingResolution || 0);
   return Number.isFinite(bitrate) && bitrate > 0 && Number.isFinite(resolution) && resolution > 0;
+}
+
+function summarizeTrailerKeys(raw: any) {
+  if (!raw || typeof raw !== 'object') return null;
+  const keys = Object.keys(raw);
+  const trailerKeys = keys.filter((k) => /trailer|transcod|video/i.test(k));
+  if (trailerKeys.length === 0) return null;
+  const summary: Record<string, any> = {};
+  for (const key of trailerKeys) {
+    const value = raw[key];
+    if (value && typeof value === 'object') {
+      summary[key] = Array.isArray(value) ? `array(${value.length})` : Object.keys(value);
+    } else {
+      summary[key] = value;
+    }
+  }
+  return summary;
 }
 
 function waitForPushMethod(client: CarriageClient, method: string, timeoutMs: number) {
@@ -775,6 +793,7 @@ export class KakaoForgeClient extends EventEmitter {
   transcodeVideos: boolean;
   ffmpegPath: string;
   ffprobePath: string;
+  debugGetConf: boolean;
   _conf: any;
 
   _booking: BookingClient | null;
@@ -856,6 +875,7 @@ export class KakaoForgeClient extends EventEmitter {
     this.transcodeVideos = config.transcodeVideos !== false;
     this.ffmpegPath = config.ffmpegPath || '';
     this.ffprobePath = config.ffprobePath || '';
+    this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
 
     // LOCO clients
@@ -1817,6 +1837,18 @@ export class KakaoForgeClient extends EventEmitter {
         appVer: this.appVer,
       });
       this._conf = conf;
+      if (this.debugGetConf || this.debug) {
+        const summary = summarizeTrailerKeys(conf?.raw);
+        if (summary) {
+          console.log('[DBG] GETCONF trailer keys:', JSON.stringify(summary));
+        } else {
+          console.log('[DBG] GETCONF trailer keys: none');
+        }
+        console.log('[DBG] GETCONF trailerInfo:', JSON.stringify({
+          trailerInfo: conf?.trailerInfo || {},
+          trailerHighInfo: conf?.trailerHighInfo || {},
+        }));
+      }
       return conf;
     } finally {
       booking.disconnect();
