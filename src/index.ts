@@ -544,12 +544,18 @@ function parseAttachments(raw: any): any[] {
   return [];
 }
 
-function resolveRoomFlags(source: any, members?: any[]) {
+function resolveRoomFlags(source: any) {
   const typeRaw = source?.type ?? '';
   const typeName = String(typeRaw).toLowerCase();
 
   let isOpenChat = false;
-  if (typeName.includes('open')) {
+  if (typeof source?.isOpenChat === 'boolean') {
+    isOpenChat = source.isOpenChat;
+  } else if (typeof source?.openChat === 'boolean') {
+    isOpenChat = source.openChat;
+  } else if (typeof source?.isOpen === 'boolean') {
+    isOpenChat = source.isOpen;
+  } else if (typeName.includes('open')) {
     isOpenChat = true;
   } else if (
     source?.openChatId ||
@@ -585,14 +591,20 @@ function resolveRoomFlags(source: any, members?: any[]) {
   }
 
   let isGroupChat = false;
-  if (isOpenChat) {
+  if (typeof source?.isGroupChat === 'boolean') {
+    isGroupChat = source.isGroupChat;
+  } else if (typeof source?.isMultiChat === 'boolean') {
+    isGroupChat = source.isMultiChat;
+  } else if (typeof source?.multiChat === 'boolean') {
+    isGroupChat = source.multiChat;
+  } else if (typeof source?.isGroup === 'boolean') {
+    isGroupChat = source.isGroup;
+  } else if (isOpenChat) {
     isGroupChat = true;
   } else if (typeName.includes('multi') || typeName.includes('group') || typeName.includes('moim')) {
     isGroupChat = true;
   } else if (typeName.includes('direct') || typeName.includes('memo') || typeName.includes('self')) {
     isGroupChat = false;
-  } else if (Array.isArray(members)) {
-    isGroupChat = members.length > 1;
   }
 
   return { isGroupChat, isOpenChat };
@@ -1697,7 +1709,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    const flags = resolveRoomFlags(roomInfo, roomInfo.displayMembers);
+    const flags = resolveRoomFlags(roomInfo);
     const msg: MessageEvent = {
       message: { id: logId, text, type, logId },
       attachmentsRaw,
@@ -1851,7 +1863,7 @@ export class KakaoForgeClient extends EventEmitter {
 
       const lastSeenLogId = safeNumber(chat.lastSeenLogId, prev.lastSeenLogId || 0);
 
-      const flags = resolveRoomFlags(chat, displayMembers.length > 0 ? displayMembers : prev.displayMembers);
+      const flags = resolveRoomFlags(chat);
       const next: ChatRoomInfo = {
         ...prev,
         chatId,
