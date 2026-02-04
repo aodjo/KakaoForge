@@ -2600,6 +2600,20 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    const chatAuthorId = normalizeIdValue(chatLog?.authorId || chatLog?.userId || 0);
+    if (
+      packet.method === 'DELMEM' &&
+      chatAuthorId &&
+      memberIds.length === 1 &&
+      String(chatAuthorId) !== String(memberIds[0])
+    ) {
+      resolvedAction = 'kick';
+      if (!actorId) {
+        actorId = chatAuthorId;
+        actorName = nameMap.get(String(chatAuthorId)) || actorName;
+      }
+    }
+
     if (memberIds.length === 0 && chatLog?.authorId) {
       memberIds = [normalizeIdValue(chatLog.authorId)];
     }
