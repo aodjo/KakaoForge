@@ -110,6 +110,22 @@ export type BackfillResult = {
   oldestLogId?: number | string;
 };
 
+export type SyncMode = 'new' | 'history' | 'full';
+
+export type SyncAllOptions = {
+  mode?: SyncMode;
+  emit?: boolean;
+  count?: number;
+  limitPerChat?: number;
+  maxPages?: number;
+};
+
+export type SyncAllResult = {
+  chats: number;
+  newMessages: number;
+  historyStored: number;
+};
+
 export type OpenChatKickOptions = {
   linkId?: number | string;
   report?: boolean;
@@ -322,6 +338,7 @@ export type ChatModule = {
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
   backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
+  syncAll: (opts?: SyncAllOptions) => Promise<SyncAllResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
@@ -1727,6 +1744,7 @@ export class KakaoForgeClient extends EventEmitter {
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
       backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
+      syncAll: (opts) => this.syncAll(opts),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
@@ -2356,6 +2374,62 @@ export class KakaoForgeClient extends EventEmitter {
     this.emit('message', this.chat, msg);
   }
 
+  _storeChatLogToDb(
+    chatId: number | string,
+    chatLog: any,
+    opts: { lastMessage?: string; openLinkId?: number | string; updateRoom?: boolean; updateThread?: boolean } = {}
+  ) {
+    if (!this._db || !chatLog) return;
+
+    const roomIdValue = normalizeIdValue(chatId || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0);
+    const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
+    if (!roomIdValue || !logIdValue || roomIdValue === 0 || logIdValue === 0) return;
+
+    const senderIdValue = normalizeIdValue(chatLog.authorId || chatLog.senderId || chatLog.userId || 0);
+    const text = chatLog.message || chatLog.msg || chatLog.text || '';
+    const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
+    const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
+    const openLinkIdValue = normalizeIdValue(
+      opts.openLinkId ??
+        extractOpenLinkIdFromRaw({ chatLog }) ??
+        chatLog.li ??
+        chatLog.linkId ??
+        0
+    );
+
+    try {
+      this._db.storeChatLog(
+        {
+          logId: logIdValue,
+          chatId: roomIdValue,
+          userId: senderIdValue,
+          type,
+          message: text,
+          attachment: attachmentRaw,
+          createdAt: safeNumber(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.created_at ?? 0, 0),
+          deletedAt: safeNumber(chatLog.deletedAt ?? chatLog.deleted_at ?? 0, 0),
+          clientMsgId: chatLog.msgId ?? chatLog.client_message_id ?? 0,
+          prevId: chatLog.prevId ?? chatLog.prev_id ?? 0,
+          referer: chatLog.referer,
+          supplement: chatLog.supplement,
+          v: chatLog.v,
+          threadId: chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0,
+        },
+        {
+          lastMessage:
+            (opts.lastMessage ?? text) || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
+          openLinkId: openLinkIdValue || undefined,
+          updateRoom: opts.updateRoom,
+          updateThread: opts.updateThread,
+        }
+      );
+    } catch (err) {
+      if (this.debug) {
+        console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
   async _buildMessageEvent(data: any): Promise<MessageEvent | null> {
     const chatLog = data.chatLog || data;
     const roomIdValue = normalizeIdValue(
@@ -2506,37 +2580,11 @@ export class KakaoForgeClient extends EventEmitter {
       logId: logIdValue,
     };
 
-    if (this._db) {
-      try {
-        const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
-        this._db.storeChatLog(
-          {
-            logId: logIdValue,
-            chatId: roomIdValue,
-            userId: senderIdValue,
-            type,
-            message: text,
-            attachment: attachmentRaw,
-            createdAt: safeNumber(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.created_at ?? 0, 0),
-            deletedAt: safeNumber(chatLog.deletedAt ?? chatLog.deleted_at ?? 0, 0),
-            clientMsgId: chatLog.msgId ?? chatLog.client_message_id ?? 0,
-            prevId: chatLog.prevId ?? chatLog.prev_id ?? 0,
-            referer: chatLog.referer,
-            supplement: chatLog.supplement,
-            v: chatLog.v,
-            threadId: chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0,
-          },
-          {
-            lastMessage: text || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
-            openLinkId: openLinkIdValue || undefined,
-          }
-        );
-      } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
-        }
-      }
-    }
+    const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
+    this._storeChatLogToDb(roomIdValue, chatLog, {
+      lastMessage: text || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
+      openLinkId: openLinkIdValue || undefined,
+    });
 
     if (roomIdValue) {
       const key = String(roomIdValue);
@@ -2945,7 +2993,7 @@ export class KakaoForgeClient extends EventEmitter {
   /**
    * Sync messages via LOCO (SYNCMSG).
    */
-  async syncMessages(chatId: number | string, { since = 0, count = 50, max = 0 }: any = {}) {
+  async syncMessages(chatId: number | string, { since = 0, count = 50, max = 0, emit = true }: any = {}) {
     if (!this._carriage) throw new Error('LOCO not connected');
 
     const key = String(normalizeIdValue(chatId));
@@ -2965,7 +3013,11 @@ export class KakaoForgeClient extends EventEmitter {
       for (const log of logs) {
         const logId = safeNumber(log?.logId || log?.msgId || 0, 0);
         if (logId > cur) {
-          this._emitMessage({ chatId, chatLog: log });
+          if (emit) {
+            this._emitMessage({ chatId, chatLog: log });
+          } else {
+            this._storeChatLogToDb(chatId, log);
+          }
         }
         if (logId > maxLogId) maxLogId = logId;
       }
@@ -3240,27 +3292,10 @@ export class KakaoForgeClient extends EventEmitter {
           }
         }
 
-        const senderIdValue = normalizeIdValue(log?.authorId || log?.userId || log?.senderId || 0);
-        const attachmentRaw = log?.attachment ?? log?.attachments ?? log?.extra ?? null;
-        this._db.storeChatLog(
-          {
-            logId: logIdValue,
-            chatId: resolvedChatId,
-            userId: senderIdValue,
-            type: safeNumber(log?.type || log?.msgType || 1, 1),
-            message: log?.message || log?.msg || log?.text || '',
-            attachment: attachmentRaw,
-            createdAt: safeNumber(log?.sendAt ?? log?.createdAt ?? log?.created_at ?? 0, 0),
-            deletedAt: safeNumber(log?.deletedAt ?? log?.deleted_at ?? 0, 0),
-            clientMsgId: log?.msgId ?? log?.client_message_id ?? 0,
-            prevId: log?.prevId ?? log?.prev_id ?? 0,
-            referer: log?.referer,
-            supplement: log?.supplement,
-            v: log?.v,
-            threadId: log?.threadId ?? log?.tid ?? log?.thread ?? 0,
-          },
-          { updateRoom: false, updateThread: false }
-        );
+        this._storeChatLogToDb(resolvedChatId, log, {
+          updateRoom: false,
+          updateThread: false,
+        });
         stored += 1;
         if (stored >= limit) break;
       }
@@ -3307,6 +3342,89 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return { stored, pages, newestLogId, oldestLogId };
+  }
+
+  /**
+   * Sync all chats (KakaoTalk-like flow).
+   */
+  async syncAll(opts: SyncAllOptions = {}): Promise<SyncAllResult> {
+    const mode: SyncMode = opts.mode || 'new';
+    const emit = opts.emit ?? false;
+    const count = typeof opts.count === 'number' ? opts.count : 50;
+    const limitPerChat = typeof opts.limitPerChat === 'number' ? opts.limitPerChat : 500;
+    const maxPages = typeof opts.maxPages === 'number' ? opts.maxPages : 10;
+
+    if ((mode === 'history' || mode === 'full') && !this._db) {
+      throw new Error('syncAll(history) requires dbPath (createClient { dbPath })');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const list = await this.getChatRooms();
+    const chatIds = new Set<number | string>();
+    if (Array.isArray(list?.chats)) {
+      for (const chat of list.chats) {
+        const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
+        if (id && id !== 0 && id !== '0') {
+          chatIds.add(id);
+        }
+      }
+    }
+    if (chatIds.size === 0) {
+      for (const key of this._chatRooms.keys()) {
+        const id = normalizeIdValue(key);
+        if (id && id !== 0 && id !== '0') {
+          chatIds.add(id);
+        }
+      }
+    }
+
+    let newMessages = 0;
+    let historyStored = 0;
+
+    for (const chatId of chatIds) {
+      const resolvedChatId = this._resolveChatId(chatId);
+      if (mode === 'new' || mode === 'full') {
+        let since: number | string = 0;
+        if (this._db) {
+          const latest = this._db.getLatestChatLogId(resolvedChatId);
+          if (latest && latest !== 0 && latest !== '0') {
+            since = latest;
+          }
+        }
+        const res = await this.syncMessages(resolvedChatId, {
+          since,
+          count,
+          emit,
+        });
+        const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
+        if (Array.isArray(logs)) newMessages += logs.length;
+      }
+
+      if (mode === 'history' || mode === 'full') {
+        const result = await this.backfillMessages(resolvedChatId, {
+          count,
+          limit: limitPerChat,
+          maxPages,
+        });
+        historyStored += result.stored;
+      }
+    }
+
+    return { chats: chatIds.size, newMessages, historyStored };
   }
 
   /**
