@@ -1748,20 +1748,23 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const postBodyRes = postRes?.body && typeof postRes.body === 'object' ? postRes.body : {};
+    const shipKey = shipBodyRes?.k || shipBodyRes?.key || shipBodyRes?.token || token;
     const attachment: Record<string, any> = {};
     if (type === 'video') {
-      const tk = postBodyRes.tk || postBodyRes.token;
-      const k = postBodyRes.k || postBodyRes.key;
-      if (!tk && !k) {
+      const tk = postBodyRes.tk || postBodyRes.token || '';
+      const k = postBodyRes.k || postBodyRes.key || '';
+      const resolvedTk = tk || '';
+      const resolvedK = k || (resolvedTk ? '' : shipKey);
+      if (!resolvedTk && !resolvedK) {
         const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
         throw new Error(`UPLOAD POST missing video token: ${preview}`);
       }
-      if (tk) attachment.tk = tk;
-      if (k) attachment.k = k;
+      if (resolvedTk) attachment.tk = resolvedTk;
+      if (resolvedK) attachment.k = resolvedK;
       if (postBodyRes.tkh) attachment.tkh = postBodyRes.tkh;
       if (postBodyRes.urlh) attachment.urlh = postBodyRes.urlh;
     } else {
-      const k = postBodyRes.k || postBodyRes.key;
+      const k = postBodyRes.k || postBodyRes.key || shipKey;
       if (!k) {
         const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
         throw new Error(`UPLOAD POST missing key: ${preview}`);
