@@ -2506,7 +2506,17 @@ export class KakaoForgeClient extends EventEmitter {
     if (!userId) return;
     const cached = this._getCachedMemberType(chatId, userId);
     if (typeof cached === 'number') return;
-    await this._waitForMemberList(chatId, this.memberLookupTimeoutMs);
+    const resolvedChatId = this._resolveChatId(chatId);
+    const roomInfo = this._chatRooms.get(String(resolvedChatId)) || {};
+    const flags = resolveRoomFlags(roomInfo);
+    if (flags.isOpenChat) {
+      await this._ensureOpenChatInfo(resolvedChatId, userId);
+      const refreshed = this._getCachedMemberType(resolvedChatId, userId);
+      if (typeof refreshed === 'number') return;
+      await this._waitForMemberName(resolvedChatId, userId, this.memberLookupTimeoutMs);
+      return;
+    }
+    await this._waitForMemberList(resolvedChatId, this.memberLookupTimeoutMs);
   }
 
   _applyChatList(body: any) {
@@ -2807,7 +2817,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (!userId) continue;
       const name = this._extractMemberName(mem);
       map.set(String(userId), String(name || ''));
-      const rawMemberType = mem?.memberType ?? mem?.linkMemberType;
+      const rawMemberType = mem?.userType ?? mem?.memberType ?? mem?.linkMemberType;
       if (rawMemberType !== undefined && rawMemberType !== null) {
         const parsed = safeNumber(rawMemberType, NaN);
         if (!Number.isNaN(parsed)) {
