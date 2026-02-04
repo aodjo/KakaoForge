@@ -3347,7 +3347,10 @@ export class KakaoForgeClient extends EventEmitter {
     attachment: AttachmentInput,
     opts: AttachmentSendOptions = {}
   ) {
-    return this.sendPhoto(chatId, attachment, { ...opts, threadId });
+    const scope = typeof opts.scope === 'number'
+      ? opts.scope
+      : (opts.sendToChatRoom === true ? 3 : 2);
+    return this.sendPhoto(chatId, attachment, { ...opts, threadId, scope });
   }
 
   async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
@@ -3372,7 +3375,10 @@ export class KakaoForgeClient extends EventEmitter {
     attachment: AttachmentInput,
     opts: AttachmentSendOptions = {}
   ) {
-    return this.sendVideo(chatId, attachment, { ...opts, threadId });
+    const scope = typeof opts.scope === 'number'
+      ? opts.scope
+      : (opts.sendToChatRoom === true ? 3 : 2);
+    return this.sendVideo(chatId, attachment, { ...opts, threadId, scope });
   }
 
   async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
@@ -3397,7 +3403,10 @@ export class KakaoForgeClient extends EventEmitter {
     attachment: AttachmentInput,
     opts: AttachmentSendOptions = {}
   ) {
-    return this.sendAudio(chatId, attachment, { ...opts, threadId });
+    const scope = typeof opts.scope === 'number'
+      ? opts.scope
+      : (opts.sendToChatRoom === true ? 3 : 2);
+    return this.sendAudio(chatId, attachment, { ...opts, threadId, scope });
   }
 
   async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
@@ -3422,7 +3431,10 @@ export class KakaoForgeClient extends EventEmitter {
     attachment: AttachmentInput,
     opts: AttachmentSendOptions = {}
   ) {
-    return this.sendFile(chatId, attachment, { ...opts, threadId });
+    const scope = typeof opts.scope === 'number'
+      ? opts.scope
+      : (opts.sendToChatRoom === true ? 3 : 2);
+    return this.sendFile(chatId, attachment, { ...opts, threadId, scope });
   }
 
   async sendContact(chatId: number | string, contact: ContactPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
