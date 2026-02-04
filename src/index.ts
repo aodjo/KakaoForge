@@ -1203,6 +1203,19 @@ function normalizeIdValue(value: any): number | string {
 function extractFeedPayload(chatLog: any, attachmentsRaw: any[]): any | null {
   if (chatLog && typeof chatLog === 'object') {
     if (chatLog.feed && typeof chatLog.feed === 'object') return chatLog.feed;
+    if (typeof chatLog.message === 'string') {
+      const text = chatLog.message.trim();
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === 'object' && ('feedType' in parsed || 'ft' in parsed || 'feed' in parsed)) {
+            return parsed;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
     if (chatLog.extra !== undefined && chatLog.extra !== null) {
       const extra = parseAttachmentJson(chatLog.extra) ?? chatLog.extra;
       if (extra && typeof extra === 'object') {
@@ -1242,6 +1255,9 @@ function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boole
   if (Array.isArray(payload?.mids)) {
     payload.mids.forEach(add);
   }
+  if (payload?.member && typeof payload.member === 'object') {
+    add(payload.member.userId ?? payload.member.id ?? payload.member.memberId ?? payload.member.mid ?? payload.member.uid);
+  }
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
       add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid);
@@ -1262,6 +1278,12 @@ function buildMemberNameMap(payload: any) {
     const name = nameValue ? String(nameValue) : '';
     map.set(String(id), name);
   };
+  if (payload?.member && typeof payload.member === 'object') {
+    add(
+      payload.member.userId ?? payload.member.id ?? payload.member.memberId ?? payload.member.mid ?? payload.member.uid,
+      payload.member.nickName ?? payload.member.nickname ?? payload.member.name
+    );
+  }
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
       add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid, mem?.nickName ?? mem?.nickname ?? mem?.name);
