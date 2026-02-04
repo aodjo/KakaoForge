@@ -1152,6 +1152,10 @@ function normalizeLogTarget(input: any): number | string {
     return normalizeIdValue(input);
   }
 
+  const body = input.body || input.response?.body || input.result?.body;
+  if (body?.logId) return normalizeIdValue(body.logId);
+  if (body?.chatLog?.logId) return normalizeIdValue(body.chatLog.logId);
+
   const message = input.message || input.chatLog || input.raw?.chatLog || input;
   const logId = normalizeIdValue(
     input.logId ||
@@ -1173,7 +1177,8 @@ function normalizeEditTarget(input: any): { logId: number | string; type?: numbe
   const logId = normalizeLogTarget(input);
   if (!logId) return null;
 
-  const message = input.message || input.chatLog || input.raw?.chatLog || input;
+  const body = input.body || input.response?.body || input.result?.body;
+  const message = input.message || input.chatLog || input.raw?.chatLog || body?.chatLog || input;
   const type = safeNumber(
     message?.type || message?.msgType || input.message?.type || input.type || MessageType.Text,
     MessageType.Text
