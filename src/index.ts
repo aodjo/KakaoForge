@@ -1233,15 +1233,39 @@ function normalizeForwardTarget(input: any): { msg: string; type: number; extra:
     : (input.type ?? input.msgType ?? innerLog?.type ?? innerLog?.msgType ?? MessageType.Text);
   const type = safeNumber(typeSource, MessageType.Text);
 
-  const extraSource = hasMessageEvent
-    ? (innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw)
-    : (input.extra ?? innerLog?.attachment ?? innerLog?.attachments ?? innerLog?.extra ?? rawLog?.attachment ?? rawLog?.attachments ?? rawLog?.extra ?? input.attachmentsRaw);
+  const pickRawExtra = (value: any) => {
+    if (typeof value === 'string') return value;
+    return undefined;
+  };
+
+  const extraCandidates = [
+    pickRawExtra(innerLog?.extra),
+    pickRawExtra(rawLog?.extra),
+    innerLog?.extra,
+    innerLog?.attachment,
+    innerLog?.attachments,
+    rawLog?.attachment,
+    rawLog?.attachments,
+    input.extra,
+  ];
+
+  let extraSource = extraCandidates.find((value) => value !== undefined && value !== null);
+  if (extraSource === undefined && Array.isArray(input.attachmentsRaw)) {
+    if (input.attachmentsRaw.length === 1) {
+      extraSource = input.attachmentsRaw[0];
+    } else if (input.attachmentsRaw.length > 1) {
+      extraSource = input.attachmentsRaw;
+    }
+  }
+
   let extra = buildExtra(extraSource);
   if (!extra) {
     extra = '{}';
   }
 
-  return { msg, type, extra };
+  const normalizedMsg = msg === '' && type !== MessageType.Text ? '' : msg;
+
+  return { msg: normalizedMsg, type, extra };
 }
 
 function pickFirstValue<T>(...values: T[]): T | undefined {
@@ -2915,12 +2939,13 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const resolvedChatId = this._resolveChatId(chatId);
+    const msgValue = normalized.msg === '' ? undefined : normalized.msg;
     return await this._carriage.forward(
       resolvedChatId,
       msgId,
       normalized.type,
       normalized.extra,
-      normalized.msg,
+      msgValue,
       { noSeen: opts.noSeen }
     );
   }
