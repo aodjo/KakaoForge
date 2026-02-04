@@ -3210,10 +3210,12 @@ export class KakaoForgeClient extends EventEmitter {
     opts: SendOptions = {}
   ) {
     const threadValue = Long.isLong(threadId) ? threadId : Long.fromString(String(threadId));
+    const scope = typeof opts.scope === 'number' ? opts.scope : 2;
     return this.sendMessage(chatId, text, {
       ...opts,
       type: MessageType.Text,
       threadId: threadValue,
+      scope,
     });
   }
 
