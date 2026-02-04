@@ -2133,17 +2133,26 @@ export class KakaoForgeClient extends EventEmitter {
 
     const postBodyRes = postRes?.body && typeof postRes.body === 'object' ? postRes.body : {};
     const shipKey = shipBodyRes?.k || shipBodyRes?.key || shipBodyRes?.token || token;
-    const attachment: Record<string, any> = {};
+    const completeBody = completePacket?.body || {};
+    const completeChatLog = completeBody.chatLog || completeBody.chatlog || null;
+    const completeAttachment = completeChatLog
+      ? parseAttachments(completeChatLog.attachment ?? completeChatLog.attachments ?? completeChatLog.extra ?? null)[0]
+      : null;
+    let attachment: Record<string, any> = {};
     if (type === 'video') {
       const tk = postBodyRes.tk || postBodyRes.token || '';
-      if (!tk) {
+      if (tk) {
+        attachment.tk = tk;
+        attachment.k = shipKey;
+        if (postBodyRes.tkh) attachment.tkh = postBodyRes.tkh;
+        if (postBodyRes.urlh) attachment.urlh = postBodyRes.urlh;
+      } else if (completeAttachment) {
+        attachment = normalizeMediaAttachment(completeAttachment) || {};
+        if (!attachment.k && shipKey) attachment.k = shipKey;
+      } else {
         const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
         throw new Error(`UPLOAD POST missing video token: ${preview}`);
       }
-      attachment.tk = tk;
-      attachment.k = shipKey;
-      if (postBodyRes.tkh) attachment.tkh = postBodyRes.tkh;
-      if (postBodyRes.urlh) attachment.urlh = postBodyRes.urlh;
     } else {
       attachment.k = shipKey;
     }
@@ -2170,12 +2179,10 @@ export class KakaoForgeClient extends EventEmitter {
       if (postBodyRes.d ?? opts.duration) attachment.d = postBodyRes.d ?? opts.duration;
     }
 
-    const completeBody = completePacket?.body || {};
-
-      result = {
-        accessKey: String(token),
-        attachment,
-        msgId,
+    result = {
+      accessKey: String(token),
+      attachment,
+      msgId,
         info: { ship: shipBodyRes, post: postRes?.body, complete: completeBody },
         raw: { ship: shipRes, post: postRes, complete: completePacket },
         chatLog: completeBody.chatLog,
