@@ -1884,6 +1884,9 @@ export class KakaoForgeClient extends EventEmitter {
       flags = resolveRoomFlags(refreshed);
 
       if (!senderName && senderIdValue) {
+        if (flags.isOpenChat) {
+          await this._ensureOpenChatInfo(roomIdValue, senderIdValue);
+        }
         senderName = this._getCachedMemberName(roomIdValue, senderIdValue) || senderName;
       }
       if (!roomName) {
