@@ -1383,6 +1383,11 @@ const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
   KICK: 'kick',
 };
 
+const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
+  4: 'join',
+  6: 'kick',
+};
+
 function resolveMemberActionFromPush(method: string): MemberAction | null {
   return PUSH_MEMBER_ACTIONS[method] || null;
 }
@@ -1891,7 +1896,10 @@ export class KakaoForgeClient extends EventEmitter {
     this.socketKeepAliveMs = typeof config.socketKeepAliveMs === 'number'
       ? config.socketKeepAliveMs
       : 30000;
-    this.feedTypeMap = config.feedTypeMap ? { ...config.feedTypeMap } : {};
+    this.feedTypeMap = {
+      ...DEFAULT_FEED_TYPE_MAP,
+      ...(config.feedTypeMap || {}),
+    };
 
     this.videoQuality = config.videoQuality || 'high';
     this.transcodeVideos = config.transcodeVideos !== false;
