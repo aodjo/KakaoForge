@@ -64,6 +64,7 @@ export type SendOptions = {
   from?: string;
   extra?: string;
   scope?: number;
+  sendToChatRoom?: boolean;
   threadId?: number | string | Long;
   featureStat?: string;
   silence?: boolean;
@@ -3210,7 +3211,14 @@ export class KakaoForgeClient extends EventEmitter {
     opts: SendOptions = {}
   ) {
     const threadValue = Long.isLong(threadId) ? threadId : Long.fromString(String(threadId));
-    const scope = typeof opts.scope === 'number' ? opts.scope : 2;
+    let scope = typeof opts.scope === 'number' ? opts.scope : undefined;
+    if (scope === undefined) {
+      if (opts.sendToChatRoom === true) {
+        scope = 3;
+      } else {
+        scope = 2;
+      }
+    }
     return this.sendMessage(chatId, text, {
       ...opts,
       type: MessageType.Text,
