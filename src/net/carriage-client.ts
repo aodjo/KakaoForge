@@ -259,40 +259,6 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
-   * Forward a message (LOCO FORWARD).
-   */
-  async forward(
-    chatId: number | string,
-    msgId: number | string,
-    type: number,
-    extra: string,
-    msg?: string,
-    opts: { noSeen?: boolean } = {}
-  ) {
-    const toLong = toLongValue;
-
-    const body: any = {
-      chatId: toLong(chatId),
-      msgId: toLong(msgId),
-      type,
-      extra,
-    };
-
-    if (opts.noSeen !== undefined) body.noSeen = !!opts.noSeen;
-    if (msg !== undefined && msg !== null) body.msg = msg;
-
-    const res = await this.request('FORWARD', body);
-    if (typeof res.status === 'number' && res.status !== 0) {
-      throw new Error(`FORWARD failed: status=${res.status}`);
-    }
-    if (!res.body || !res.body.logId) {
-      const preview = res.body ? JSON.stringify(res.body) : '(empty)';
-      throw new Error(`FORWARD response missing logId: ${preview}`);
-    }
-    return res;
-  }
-
-  /**
    * Delete a message for everyone (DELETEMSG).
    */
   async deleteMsg(chatId: number | string, logId: number | string) {
