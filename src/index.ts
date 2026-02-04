@@ -378,12 +378,6 @@ function computeTargetVideoSize(meta: VideoProbe, resolution: number) {
   return { width: toEven(width), height: toEven(height) };
 }
 
-function defaultVideoProfile(quality: VideoQuality) {
-  return quality === 'high'
-    ? { bitrate: 4000000, resolution: 1080 }
-    : { bitrate: 2000000, resolution: 720 };
-}
-
 function runProcess(binPath: string, args: string[], timeoutMs = 0): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binPath, args, { windowsHide: true });
@@ -1806,9 +1800,11 @@ export class KakaoForgeClient extends EventEmitter {
     const base = quality === 'high'
       ? (Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo)
       : trailerInfo;
-    const fallback = defaultVideoProfile(quality);
-    const bitrate = Number(base?.videoTranscodingBitrate || 0) || fallback.bitrate;
-    const resolution = Number(base?.videoTranscodingResolution || 0) || fallback.resolution;
+    const bitrate = Number(base?.videoTranscodingBitrate || 0);
+    const resolution = Number(base?.videoTranscodingResolution || 0);
+    if (!bitrate || !resolution) {
+      throw new Error('GETCONF missing trailerInfo. Cannot determine video transcode profile.');
+    }
     return { bitrate, resolution };
   }
 
@@ -1834,10 +1830,9 @@ export class KakaoForgeClient extends EventEmitter {
     const resolution = Number(opts.videoResolution) > 0 ? Number(opts.videoResolution) : profile.resolution;
     const targetSize = computeTargetVideoSize(meta, resolution);
 
-    const fallbackProfile = defaultVideoProfile(quality);
     const targetBitrate = Number(opts.videoBitrate) > 0
       ? Number(opts.videoBitrate)
-      : (profile.bitrate > 0 ? profile.bitrate : fallbackProfile.bitrate);
+      : profile.bitrate;
     const sourceBitrate = meta.bitrate > 0 ? meta.bitrate : 0;
     const finalBitrate = sourceBitrate > 0 ? Math.min(sourceBitrate, targetBitrate) : targetBitrate;
     const bitrateK = Math.max(128, Math.round(finalBitrate / 1000));
