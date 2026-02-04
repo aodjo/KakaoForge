@@ -596,6 +596,101 @@ function parseAttachments(raw: any): any[] {
   return [];
 }
 
+function isBlankText(value: any) {
+  if (value === undefined || value === null) return true;
+  return String(value).trim().length === 0;
+}
+
+function truncateChatLogMessage(value: string) {
+  if (!value) return value;
+  if (value.length <= 500) return value;
+  return `${value.slice(0, 500)} ...`;
+}
+
+function extractChatLogPayload(raw: any): any {
+  if (!raw || typeof raw !== 'object') return null;
+  const chatLog = raw.chatLog;
+  if (chatLog && typeof chatLog === 'object') {
+    if (chatLog.chatLog && typeof chatLog.chatLog === 'object') return chatLog.chatLog;
+    return chatLog;
+  }
+  return raw;
+}
+
+function parseAttachmentJson(raw: any): any {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === 'object') return raw;
+  return null;
+}
+
+function buildSpamChatLogInfo(raw: any): string | null {
+  const chatLog = extractChatLogPayload(raw);
+  if (!chatLog || typeof chatLog !== 'object') return null;
+
+  const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
+  let message = chatLog.message ?? chatLog.msg ?? chatLog.text ?? '';
+  if (isBlankText(message) && typeof attachmentRaw === 'string') {
+    message = attachmentRaw;
+  }
+  message = truncateChatLogMessage(String(message ?? ''));
+
+  const attachmentJson = parseAttachmentJson(attachmentRaw);
+  const messageBody: any = {};
+  if (!isBlankText(message)) {
+    messageBody.message = message;
+  }
+  if (attachmentJson && (Array.isArray(attachmentJson) ? attachmentJson.length > 0 : Object.keys(attachmentJson).length > 0)) {
+    messageBody.attachment = attachmentJson;
+  }
+  if (typeof chatLog.referer === 'number') {
+    messageBody.referer = chatLog.referer;
+  }
+  if (typeof chatLog.revision === 'number') {
+    messageBody.revision = chatLog.revision;
+  }
+
+  if (Object.keys(messageBody).length === 0) return null;
+
+  const info = {
+    u: toLong(chatLog.authorId ?? chatLog.userId ?? chatLog.senderId ?? 0),
+    m: messageBody,
+    s: toLong(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.s ?? 0),
+    t: safeNumber(chatLog.type ?? chatLog.msgType ?? 1, 1),
+    l: toLong(chatLog.logId ?? chatLog.msgId ?? chatLog.id ?? 0),
+    scope: typeof chatLog.scope === 'number' ? chatLog.scope : safeNumber(chatLog.scope ?? 1, 1),
+    threadId: toLong(chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0),
+  };
+
+  return stringifyLossless([info].reverse());
+}
+
+function normalizeOpenChatBlindTarget(
+  input: any
+): { memberId: number | string | Long; linkId?: number | string; isOpenChat?: boolean; chatLogInfo?: string } | null {
+  if (!input) return null;
+  const raw = input.raw ?? input;
+  const chatLog = extractChatLogPayload(raw);
+  if (!chatLog || typeof chatLog !== 'object') return null;
+
+  const memberId = chatLog.authorId ?? chatLog.userId ?? chatLog.senderId;
+  if (memberId === undefined || memberId === null) return null;
+
+  const linkId = extractOpenLinkIdFromRaw(raw) ?? (input.room?.openLinkId ? normalizeIdValue(input.room.openLinkId) : undefined);
+  const isOpenChat = input.room?.isOpenChat;
+  const chatLogInfo = buildSpamChatLogInfo(raw) ?? undefined;
+
+  return { memberId, linkId, isOpenChat, chatLogInfo };
+}
+
 function extractOpenLinkIdFromRaw(raw: any): number | string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   if (raw.li !== undefined && raw.li !== null && raw.li !== '') {
@@ -4036,9 +4131,13 @@ export class KakaoForgeClient extends EventEmitter {
   async openChatBlind(chatId: number | string, target: any, opts: OpenChatBlindOptions = {}) {
     if (!this._carriage) throw new Error('LOCO not connected');
     const resolvedChatId = this._resolveChatId(chatId);
-    const targetInfo = normalizeOpenChatMemberTarget(target);
+    const targetInfo = normalizeOpenChatBlindTarget(target);
     if (!targetInfo?.memberId) {
-      throw new Error('open chat blind requires memberId');
+      throw new Error('open chat blind requires MessageEvent or raw chatLog');
+    }
+    const memberIdValue = normalizeIdValue(targetInfo.memberId);
+    if (!memberIdValue) {
+      throw new Error('open chat blind requires MessageEvent or raw chatLog');
     }
 
     let linkIdValue: number | string | undefined;
@@ -4068,12 +4167,17 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('open chat blind requires openLinkId');
     }
 
+    const chatLogInfo = opts.chatLogInfo ?? targetInfo.chatLogInfo;
+    if (!chatLogInfo) {
+      throw new Error('open chat blind requires chatLogInfo');
+    }
+
     return await this._carriage.blind({
       linkId: linkIdValue,
       chatId: resolvedChatId,
-      memberId: targetInfo.memberId,
+      memberId: memberIdValue,
       report: !!opts.report,
-      chatLogInfo: opts.chatLogInfo,
+      chatLogInfo,
       category: opts.category,
     });
   }
