@@ -1255,9 +1255,6 @@ function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boole
   if (Array.isArray(payload?.mids)) {
     payload.mids.forEach(add);
   }
-  if (payload?.member && typeof payload.member === 'object') {
-    add(payload.member.userId ?? payload.member.id ?? payload.member.memberId ?? payload.member.mid ?? payload.member.uid);
-  }
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
       add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid);
@@ -1270,6 +1267,28 @@ function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boole
   return out;
 }
 
+function extractFeedMemberIds(feed: any) {
+  const out: Array<number | string> = [];
+  const seen = new Set<string>();
+  const add = (value: any) => {
+    const id = normalizeIdValue(value);
+    if (!id) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(id);
+  };
+  if (feed?.member && typeof feed.member === 'object') {
+    add(feed.member.userId);
+  }
+  if (Array.isArray(feed?.members)) {
+    for (const mem of feed.members) {
+      add(mem?.userId);
+    }
+  }
+  return out;
+}
+
 function buildMemberNameMap(payload: any) {
   const map = new Map<string, string>();
   const add = (idValue: any, nameValue: any) => {
@@ -1278,18 +1297,31 @@ function buildMemberNameMap(payload: any) {
     const name = nameValue ? String(nameValue) : '';
     map.set(String(id), name);
   };
-  if (payload?.member && typeof payload.member === 'object') {
-    add(
-      payload.member.userId ?? payload.member.id ?? payload.member.memberId ?? payload.member.mid ?? payload.member.uid,
-      payload.member.nickName ?? payload.member.nickname ?? payload.member.name
-    );
-  }
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
       add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid, mem?.nickName ?? mem?.nickname ?? mem?.name);
     }
   }
   add(payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid, payload?.memberName ?? payload?.nickName);
+  return map;
+}
+
+function buildFeedMemberNameMap(feed: any) {
+  const map = new Map<string, string>();
+  const add = (idValue: any, nameValue: any) => {
+    const id = normalizeIdValue(idValue);
+    if (!id) return;
+    const name = nameValue ? String(nameValue) : '';
+    map.set(String(id), name);
+  };
+  if (feed?.member && typeof feed.member === 'object') {
+    add(feed.member.userId, feed.member.nickName);
+  }
+  if (Array.isArray(feed?.members)) {
+    for (const mem of feed.members) {
+      add(mem?.userId, mem?.nickName);
+    }
+  }
   return map;
 }
 
@@ -2573,8 +2605,8 @@ export class KakaoForgeClient extends EventEmitter {
     const action = this._resolveFeedAction(feed);
     if (!action) return;
 
-    const memberIds = extractMemberIdsFromPayload(feed);
-    const nameMap = buildMemberNameMap(feed);
+    const memberIds = extractFeedMemberIds(feed);
+    const nameMap = buildFeedMemberNameMap(feed);
 
     const feedActorId = extractActorIdFromPayload(feed);
     const actorId = feedActorId || msg.sender.id;
@@ -2613,9 +2645,9 @@ export class KakaoForgeClient extends EventEmitter {
       if (feed) {
         const feedAction = this._resolveFeedAction(feed);
         if (feedAction) resolvedAction = feedAction;
-        const feedMemberIds = extractMemberIdsFromPayload(feed);
+        const feedMemberIds = extractFeedMemberIds(feed);
         if (feedMemberIds.length > 0) memberIds = feedMemberIds;
-        const feedNameMap = buildMemberNameMap(feed);
+        const feedNameMap = buildFeedMemberNameMap(feed);
         if (feedNameMap.size > 0) nameMap = feedNameMap;
         const feedActorId = extractActorIdFromPayload(feed);
         if (feedActorId) {
