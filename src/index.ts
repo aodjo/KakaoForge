@@ -94,6 +94,16 @@ export type ReactionOptions = {
   reqId?: number | string;
 };
 
+export type OpenChatKickOptions = {
+  linkId?: number | string;
+  report?: boolean;
+};
+
+export type OpenChatBlindOptions = OpenChatKickOptions & {
+  chatLogInfo?: string;
+  category?: string;
+};
+
 export type EditMessageOptions = {
   type?: number;
   extra?: string | Record<string, any> | any[];
@@ -286,6 +296,8 @@ export type ChatModule = {
   sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
   sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
+  openChatKick: (chatId: number | string, target: any, opts?: OpenChatKickOptions) => Promise<any>;
+  openChatBlind: (chatId: number | string, target: any, opts?: OpenChatBlindOptions) => Promise<any>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1175,6 +1187,36 @@ function normalizeReactionTarget(input: any): { logId: number | string; linkId?:
   return { logId, linkId, isOpenChat };
 }
 
+function normalizeOpenChatMemberTarget(
+  input: any
+): { memberId: number | string; linkId?: number | string; isOpenChat?: boolean } | null {
+  if (input === undefined || input === null) return null;
+  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
+    return { memberId: normalizeIdValue(input) };
+  }
+
+  const raw = input.raw || {};
+  const memberId = normalizeIdValue(
+    input.memberId ||
+      input.userId ||
+      input.senderId ||
+      input.authorId ||
+      input.sender?.id ||
+      raw.authorId ||
+      raw.userId ||
+      raw.senderId ||
+      raw.chatLog?.authorId ||
+      raw.chatLog?.userId ||
+      0
+  );
+  if (!memberId) return null;
+
+  const linkId = extractOpenLinkIdFromRaw(raw) ?? (input.room?.openLinkId ? normalizeIdValue(input.room.openLinkId) : undefined);
+  const isOpenChat = input.room?.isOpenChat;
+
+  return { memberId, linkId, isOpenChat };
+}
+
 function normalizeLogTarget(input: any): number | string {
   if (input === undefined || input === null) return 0;
   if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
@@ -1548,6 +1590,8 @@ export class KakaoForgeClient extends EventEmitter {
       sendReply: (chatId, text, replyTo, opts) => this.sendReply(chatId, text, replyTo, opts),
       sendThreadReply: (chatId, threadId, text, opts) => this.sendThreadReply(chatId, threadId, text, opts),
       sendReaction: (chatId, target, reactionType, opts) => this.sendReaction(chatId, target, reactionType, opts),
+      openChatKick: (chatId, target, opts) => this.openChatKick(chatId, target, opts),
+      openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
@@ -3944,6 +3988,94 @@ export class KakaoForgeClient extends EventEmitter {
     const res = await bubble.sendReaction(resolvedChatId, payload);
     assertBubbleOk(res, '공감 전송');
     return res;
+  }
+
+  async openChatKick(chatId: number | string, target: any, opts: OpenChatKickOptions = {}) {
+    if (!this._carriage) throw new Error('LOCO not connected');
+    const resolvedChatId = this._resolveChatId(chatId);
+    const targetInfo = normalizeOpenChatMemberTarget(target);
+    if (!targetInfo?.memberId) {
+      throw new Error('open chat kick requires memberId');
+    }
+
+    let linkIdValue: number | string | undefined;
+    if (opts.linkId !== undefined && opts.linkId !== null && opts.linkId !== '') {
+      linkIdValue = normalizeIdValue(opts.linkId);
+    } else if (targetInfo.linkId !== undefined) {
+      linkIdValue = normalizeIdValue(targetInfo.linkId);
+    }
+
+    const roomKey = String(resolvedChatId);
+    const roomInfo = this._chatRooms.get(roomKey);
+    const isOpenChat = targetInfo.isOpenChat ?? roomInfo?.isOpenChat ?? false;
+
+    if (!linkIdValue && roomInfo?.openLinkId) {
+      linkIdValue = normalizeIdValue(roomInfo.openLinkId);
+    }
+
+    if (!linkIdValue && isOpenChat) {
+      await this._ensureOpenChatInfo(resolvedChatId);
+      const refreshed = this._chatRooms.get(roomKey);
+      if (refreshed?.openLinkId) {
+        linkIdValue = normalizeIdValue(refreshed.openLinkId);
+      }
+    }
+
+    if (!linkIdValue || linkIdValue === 0 || linkIdValue === '0') {
+      throw new Error('open chat kick requires openLinkId');
+    }
+
+    return await this._carriage.kickMem({
+      linkId: linkIdValue,
+      chatId: resolvedChatId,
+      memberId: targetInfo.memberId,
+      reported: !!opts.report,
+    });
+  }
+
+  async openChatBlind(chatId: number | string, target: any, opts: OpenChatBlindOptions = {}) {
+    if (!this._carriage) throw new Error('LOCO not connected');
+    const resolvedChatId = this._resolveChatId(chatId);
+    const targetInfo = normalizeOpenChatMemberTarget(target);
+    if (!targetInfo?.memberId) {
+      throw new Error('open chat blind requires memberId');
+    }
+
+    let linkIdValue: number | string | undefined;
+    if (opts.linkId !== undefined && opts.linkId !== null && opts.linkId !== '') {
+      linkIdValue = normalizeIdValue(opts.linkId);
+    } else if (targetInfo.linkId !== undefined) {
+      linkIdValue = normalizeIdValue(targetInfo.linkId);
+    }
+
+    const roomKey = String(resolvedChatId);
+    const roomInfo = this._chatRooms.get(roomKey);
+    const isOpenChat = targetInfo.isOpenChat ?? roomInfo?.isOpenChat ?? false;
+
+    if (!linkIdValue && roomInfo?.openLinkId) {
+      linkIdValue = normalizeIdValue(roomInfo.openLinkId);
+    }
+
+    if (!linkIdValue && isOpenChat) {
+      await this._ensureOpenChatInfo(resolvedChatId);
+      const refreshed = this._chatRooms.get(roomKey);
+      if (refreshed?.openLinkId) {
+        linkIdValue = normalizeIdValue(refreshed.openLinkId);
+      }
+    }
+
+    if (!linkIdValue || linkIdValue === 0 || linkIdValue === '0') {
+      throw new Error('open chat blind requires openLinkId');
+    }
+
+    return await this._carriage.blind({
+      linkId: linkIdValue,
+      chatId: resolvedChatId,
+      memberId: targetInfo.memberId,
+      report: !!opts.report,
+      chatLogInfo: opts.chatLogInfo,
+      category: opts.category,
+    });
   }
 
   _getCalendarClient() {

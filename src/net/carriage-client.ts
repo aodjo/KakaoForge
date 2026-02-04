@@ -438,6 +438,72 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Kick a member from an open chat (KICKMEM).
+   */
+  async kickMem({
+    linkId,
+    chatId,
+    memberId,
+    reported = false,
+  }: {
+    linkId: number | string;
+    chatId: number | string;
+    memberId: number | string;
+    reported?: boolean;
+  }) {
+    const toLong = toLongValue;
+    const body = {
+      li: toLong(linkId),
+      c: toLong(chatId),
+      mid: toLong(memberId),
+      r: !!reported,
+    };
+    const res = await this.request('KICKMEM', body);
+    if (typeof res.status === 'number' && res.status !== 0) {
+      throw new Error(`KICKMEM failed: status=${res.status}`);
+    }
+    return res;
+  }
+
+  /**
+   * Blind a member from an open chat (BLIND).
+   */
+  async blind({
+    linkId,
+    chatId,
+    memberId,
+    report = false,
+    chatLogInfo,
+    category,
+  }: {
+    linkId: number | string;
+    chatId: number | string;
+    memberId: number | string;
+    report?: boolean;
+    chatLogInfo?: string;
+    category?: string;
+  }) {
+    const toLong = toLongValue;
+    const body: any = {
+      li: toLong(linkId),
+      c: toLong(chatId),
+      mid: toLong(memberId),
+      r: !!report,
+    };
+    if (chatLogInfo && String(chatLogInfo).trim()) {
+      body.cli = chatLogInfo;
+    }
+    if (category && String(category).trim()) {
+      body.cat = category;
+    }
+    const res = await this.request('BLIND', body);
+    if (typeof res.status === 'number' && res.status !== 0) {
+      throw new Error(`BLIND failed: status=${res.status}`);
+    }
+    return res;
+  }
+
+  /**
    * Start periodic PING.
    */
   startPing(intervalMs = 60000) {
