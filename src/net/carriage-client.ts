@@ -4,6 +4,18 @@ import { Long } from 'bson';
 import { LocoPacket, HEADER_SIZE } from '../protocol/loco-packet';
 import { V2SLCrypto } from '../crypto/v2sl';
 
+function toLongValue(value: any) {
+  if (Long.isLong(value)) return value;
+  if (typeof value === 'string') {
+    if (!value) return Long.fromNumber(0);
+    return Long.fromString(value);
+  }
+  if (typeof value === 'bigint') return Long.fromString(value.toString());
+  const num = typeof value === 'number' ? value : parseInt(value, 10);
+  if (!Number.isFinite(num)) return Long.fromNumber(0);
+  return Long.fromNumber(num);
+}
+
 /**
  * Carriage server connection (V2SL encrypted).
  * Used for LOGINLIST and all messaging after CHECKIN.
@@ -214,10 +226,7 @@ export class CarriageClient extends EventEmitter {
    * Send a message to a chatroom.
    */
   async write(chatId: number | string, text: string, type = 1, opts: any = {}) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body: any = {
       chatId: toLong(chatId),
@@ -258,10 +267,7 @@ export class CarriageClient extends EventEmitter {
     lastTokenId = 0,
     lastChatId = 0,
   }: any = {}) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body = {
       chatIds: (chatIds || []).map(toLong),
@@ -282,10 +288,7 @@ export class CarriageClient extends EventEmitter {
    * @param {number} [opts.cnt=50]
    */
   async syncMsg({ chatId, cur = 0, max = 0, cnt = 50 }: any) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body = {
       chatId: toLong(chatId),
@@ -303,10 +306,7 @@ export class CarriageClient extends EventEmitter {
    * @param {number[]|string[]} logIds
    */
   async getMsgs(chatIds: Array<number | string>, logIds: Array<number | string>) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body = {
       chatIds: (chatIds || []).map(toLong),
@@ -320,10 +320,7 @@ export class CarriageClient extends EventEmitter {
    * Fetch member info for specific users in a chat (MEMBER).
    */
   async member(chatId: number | string, memberIds: Array<number | string>) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body = {
       chatId: toLong(chatId),
@@ -337,10 +334,7 @@ export class CarriageClient extends EventEmitter {
    * Fetch member list for a chat (MEMLIST).
    */
   async memList({ chatId, token = 0, excludeMe = false }: any) {
-    const toLong = (v) => {
-      if (Long.isLong(v)) return v;
-      return Long.fromNumber(typeof v === 'number' ? v : parseInt(v, 10));
-    };
+    const toLong = toLongValue;
 
     const body = {
       chatId: toLong(chatId),

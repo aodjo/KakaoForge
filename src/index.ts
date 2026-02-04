@@ -30,29 +30,29 @@ export type TransportMode = 'loco' | null;
 
 export type MessageEvent = {
   message: {
-    id: number;
+    id: number | string;
     text: string;
     type: number;
-    logId: number;
+    logId: number | string;
   };
   attachmentsRaw: any[];
   sender: {
-    id: number;
+    id: number | string;
     name: string;
   };
   room: {
-    id: number;
+    id: number | string;
     name: string;
     isGroupChat: boolean;
     isOpenChat: boolean;
   };
   raw: any;
   // Legacy aliases for compatibility
-  chatId: number;
-  senderId: number;
+  chatId: number | string;
+  senderId: number | string;
   text: string;
   type: number;
-  logId: number;
+  logId: number | string;
 };
 
 export type SendOptions = {
@@ -278,7 +278,7 @@ export type ChatModule = {
 };
 
 type ChatRoomInfo = {
-  chatId?: number;
+  chatId?: number | string;
   type?: string;
   title?: string;
   roomName?: string;
@@ -1677,17 +1677,22 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _emitMessageInternal(data: any) {
     const chatLog = data.chatLog || data;
-    const roomId = safeNumber(data.chatId || chatLog.chatId || 0, 0);
-    const senderId = safeNumber(chatLog.authorId || chatLog.senderId || chatLog.userId || 0, 0);
+    const roomIdValue = normalizeIdValue(
+      data.chatId || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0
+    );
+    const senderIdValue = normalizeIdValue(
+      chatLog.authorId || chatLog.senderId || chatLog.userId || 0
+    );
     const text = chatLog.message || chatLog.msg || chatLog.text || '';
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
-    const logId = safeNumber(chatLog.logId || chatLog.msgId || 0, 0);
+    const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
+    const logIdNumeric = safeNumber(logIdValue, 0);
     const attachmentsRaw = parseAttachments(
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
 
-    if (roomId) {
-      this._ensureMemberList(roomId);
+    if (roomIdValue) {
+      this._ensureMemberList(roomIdValue);
     }
 
     let senderName =
@@ -1698,43 +1703,43 @@ export class KakaoForgeClient extends EventEmitter {
       chatLog.name ||
       '';
 
-    const roomInfo = this._chatRooms.get(String(roomId)) || {};
+    const roomInfo = this._chatRooms.get(String(roomIdValue)) || {};
     let roomName = roomInfo.roomName || roomInfo.title || '';
 
-    if (roomId && (!senderName || !roomName)) {
-      await this._waitForMemberContext(roomId, senderId);
-      if (!senderName && senderId) {
-        senderName = this._getCachedMemberName(roomId, senderId) || senderName;
+    if (roomIdValue && (!senderName || !roomName)) {
+      await this._waitForMemberContext(roomIdValue, senderIdValue);
+      if (!senderName && senderIdValue) {
+        senderName = this._getCachedMemberName(roomIdValue, senderIdValue) || senderName;
       }
       if (!roomName) {
-        const derived = this._buildRoomNameFromMembers(roomId);
+        const derived = this._buildRoomNameFromMembers(String(roomIdValue));
         if (derived) {
           roomName = derived;
-          this._chatRooms.set(String(roomId), { ...roomInfo, roomName });
+          this._chatRooms.set(String(roomIdValue), { ...roomInfo, roomName });
         }
       }
     }
 
     const flags = resolveRoomFlags(roomInfo);
     const msg: MessageEvent = {
-      message: { id: logId, text, type, logId },
+      message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,
-      sender: { id: senderId, name: senderName },
-      room: { id: roomId, name: roomName, isGroupChat: flags.isGroupChat, isOpenChat: flags.isOpenChat },
+      sender: { id: senderIdValue, name: senderName },
+      room: { id: roomIdValue, name: roomName, isGroupChat: flags.isGroupChat, isOpenChat: flags.isOpenChat },
       raw: data,
-      chatId: roomId,
-      senderId,
+      chatId: roomIdValue,
+      senderId: senderIdValue,
       text,
       type,
-      logId,
+      logId: logIdValue,
     };
 
-    if (roomId) {
-      const key = String(roomId);
+    if (roomIdValue) {
+      const key = String(roomIdValue);
       const prev = this._chatRooms.get(key) || {};
       const prevLast = safeNumber(prev.lastLogId || 0, 0);
-      if (logId > prevLast) {
-        this._chatRooms.set(key, { ...prev, lastLogId: logId });
+      if (logIdNumeric > prevLast) {
+        this._chatRooms.set(key, { ...prev, lastLogId: logIdNumeric });
       }
     }
 
@@ -1890,14 +1895,14 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
-  _ensureMemberList(chatId: number) {
+  _ensureMemberList(chatId: number | string) {
     const key = String(chatId);
     if (!this._memberCacheUpdatedAt.has(key)) {
       this._fetchMemberList(chatId, { force: true }).catch(() => {});
     }
   }
 
-  async _waitForMemberContext(chatId: number, senderId: number) {
+  async _waitForMemberContext(chatId: number | string, senderId: number | string) {
     const timeoutMs = this.memberLookupTimeoutMs;
     const key = String(chatId);
 
@@ -1913,11 +1918,11 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
-  async _waitForMemberList(chatId: number, timeoutMs: number) {
+  async _waitForMemberList(chatId: number | string, timeoutMs: number) {
     await this._waitWithTimeout(this._fetchMemberList(chatId, { force: true }), timeoutMs);
   }
 
-  async _waitForMemberName(chatId: number, userId: number, timeoutMs: number) {
+  async _waitForMemberName(chatId: number | string, userId: number | string, timeoutMs: number) {
     await this._waitWithTimeout(this._fetchMemberName(chatId, userId), timeoutMs);
   }
 
@@ -1933,7 +1938,7 @@ export class KakaoForgeClient extends EventEmitter {
     ]);
   }
 
-  _buildRoomNameFromMembers(chatId: number) {
+  _buildRoomNameFromMembers(chatId: number | string) {
     const map = this._memberNames.get(String(chatId));
     if (!map || map.size === 0) return '';
     const names: string[] = [];
@@ -1948,7 +1953,7 @@ export class KakaoForgeClient extends EventEmitter {
     return `${names.slice(0, max).join(', ')}...`;
   }
 
-  async _fetchMemberList(chatId: number, { force = false }: any = {}) {
+  async _fetchMemberList(chatId: number | string, { force = false }: any = {}) {
     if (!this._carriage) return;
     const key = String(chatId);
     const existing = this._memberListFetchInFlight.get(key);
@@ -1988,7 +1993,7 @@ export class KakaoForgeClient extends EventEmitter {
     return task;
   }
 
-  _getCachedMemberName(chatId: number, userId: number) {
+  _getCachedMemberName(chatId: number | string, userId: number | string) {
     const map = this._memberNames.get(String(chatId));
     if (!map) return '';
     return map.get(String(userId)) || '';
@@ -2015,7 +2020,7 @@ export class KakaoForgeClient extends EventEmitter {
     const key = String(chatId);
     const map = this._memberNames.get(key) || new Map<string, string>();
     for (const mem of members) {
-      const userId = safeNumber(mem?.userId || mem?.id || mem?.memberId || mem?.user_id, 0);
+      const userId = normalizeIdValue(mem?.userId || mem?.id || mem?.memberId || mem?.user_id || 0);
       if (!userId) continue;
       const name = this._extractMemberName(mem);
       map.set(String(userId), String(name || ''));
@@ -2027,14 +2032,14 @@ export class KakaoForgeClient extends EventEmitter {
 
     const room = this._chatRooms.get(key);
     if (room && !room.roomName) {
-      const derived = this._buildRoomNameFromMembers(Number(chatId));
+      const derived = this._buildRoomNameFromMembers(chatId);
       if (derived) {
         this._chatRooms.set(key, { ...room, roomName: derived });
       }
     }
   }
 
-  async _fetchMemberName(chatId: number, userId: number) {
+  async _fetchMemberName(chatId: number | string, userId: number | string) {
     if (!this._carriage) return;
     const key = `${chatId}:${userId}`;
     const existing = this._memberFetchInFlight.get(key);
