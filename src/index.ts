@@ -2600,6 +2600,21 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    if (memberIds.length === 0 && chatLog?.authorId) {
+      memberIds = [normalizeIdValue(chatLog.authorId)];
+    }
+
+    if (!actorId) {
+      if ((resolvedAction === 'join' || resolvedAction === 'leave') && memberIds.length === 1) {
+        actorId = memberIds[0];
+        actorName = nameMap.get(String(actorId)) || actorName;
+      }
+    }
+
+    if (this.debug && (!actorId || memberIds.length === 0)) {
+      console.log(`[DBG] memberEvent incomplete (${packet.method})`, JSON.stringify(body).substring(0, 200));
+    }
+
     const event = this._buildMemberEvent(resolvedAction, roomId, {
       actorId,
       actorName,
