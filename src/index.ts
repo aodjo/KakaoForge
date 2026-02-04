@@ -67,6 +67,20 @@ export type SendOptions = {
   type?: number;
 };
 
+export type ReplyTarget = {
+  logId: number | string;
+  userId: number | string;
+  text?: string;
+  type?: number;
+  linkId?: number | string;
+  mentions?: any[];
+};
+
+export type ReplyOptions = SendOptions & {
+  attachOnly?: boolean;
+  attachType?: number;
+};
+
 export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
 
 export type AttachmentSendOptions = SendOptions & UploadOptions & {
@@ -243,6 +257,8 @@ function loadAuthFile(authPath: string): AuthFile {
 
 export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
+  sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -777,6 +793,84 @@ function normalizeProfileAttachment(input: any) {
   return input;
 }
 
+function extractMentions(raw: any): any[] | undefined {
+  if (!raw) return undefined;
+  if (Array.isArray(raw)) {
+    if (raw.length > 0 && raw.every((entry) => typeof entry === 'object' && entry && 'user_id' in entry)) {
+      return raw;
+    }
+    for (const entry of raw) {
+      if (entry && Array.isArray(entry.mentions)) {
+        return entry.mentions;
+      }
+    }
+    return undefined;
+  }
+  if (typeof raw === 'object' && Array.isArray(raw.mentions)) {
+    return raw.mentions;
+  }
+  return undefined;
+}
+
+function normalizeIdValue(value: any): number | string {
+  if (value === undefined || value === null) return 0;
+  if (Long.isLong(value)) return value.toString();
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'object' && typeof value.toString === 'function') {
+    const str = value.toString();
+    if (/^\d+$/.test(str)) return str;
+  }
+  return Number(value) || 0;
+}
+
+function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
+  if (!target || !target.logId || !target.userId) {
+    throw new Error('reply target requires logId and userId');
+  }
+  const attachment: any = {
+    attach_only: !!opts.attachOnly,
+    attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
+    src_logId: normalizeIdValue(target.logId),
+    src_userId: normalizeIdValue(target.userId),
+    src_message: target.text || '',
+    src_type: typeof target.type === 'number' ? target.type : MessageType.Text,
+    src_mentions: Array.isArray(target.mentions) ? target.mentions : [],
+  };
+  if (target.linkId !== undefined && target.linkId !== null) {
+    attachment.src_linkId = normalizeIdValue(target.linkId);
+  }
+  return attachment;
+}
+
+function normalizeReplyTarget(input: any): ReplyTarget | null {
+  if (!input) return null;
+
+  if (input.message && input.sender) {
+    const message = input.message || {};
+    const sender = input.sender || {};
+    return {
+      logId: normalizeIdValue(message.logId || message.id || input.logId || 0),
+      userId: normalizeIdValue(sender.id || input.senderId || 0),
+      text: message.text || input.text || '',
+      type: safeNumber(message.type || input.type || MessageType.Text, MessageType.Text),
+      mentions: extractMentions(input.attachmentsRaw),
+    };
+  }
+
+  const logId = normalizeIdValue(input.logId || input.msgId || input.id || 0);
+  const userId = normalizeIdValue(
+    input.userId || input.senderId || input.authorId || input.sender?.id || 0
+  );
+  const text = input.message || input.text || input.msg || '';
+  const type = safeNumber(input.type || input.msgType || MessageType.Text, MessageType.Text);
+  const mentions = input.mentions || input.src_mentions || extractMentions(input.attachmentsRaw);
+  const linkId = input.linkId || input.src_linkId;
+
+  return { logId, userId, text, type, mentions, linkId };
+}
+
 function pickFirstValue<T>(...values: T[]): T | undefined {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') {
@@ -1078,6 +1172,8 @@ export class KakaoForgeClient extends EventEmitter {
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
+      sendReply: (chatId, text, replyTo, opts) => this.sendReply(chatId, text, replyTo, opts),
+      sendThreadReply: (chatId, threadId, text, opts) => this.sendThreadReply(chatId, threadId, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
       uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
       uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
@@ -2562,6 +2658,39 @@ export class KakaoForgeClient extends EventEmitter {
     return this.sendMessage(chatId, text, MessageType.Text, opts);
   }
 
+  async sendReply(
+    chatId: number | string,
+    text: string,
+    replyTo: ReplyTarget | MessageEvent | any,
+    opts: ReplyOptions = {}
+  ) {
+    const target = normalizeReplyTarget(replyTo);
+    if (!target || !target.logId || !target.userId) {
+      throw new Error('reply target requires logId/userId');
+    }
+    const attachment = buildReplyAttachment(target, opts);
+    const extra = buildExtra(attachment, opts.extra);
+    if (!extra) {
+      throw new Error('reply attachment is required');
+    }
+    const { extra: _extra, attachOnly: _attachOnly, attachType: _attachType, ...sendOpts } = opts as ReplyOptions;
+    return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Text, extra });
+  }
+
+  async sendThreadReply(
+    chatId: number | string,
+    threadId: number | string,
+    text: string,
+    opts: SendOptions = {}
+  ) {
+    const threadValue = Long.isLong(threadId) ? threadId : Long.fromString(String(threadId));
+    return this.sendMessage(chatId, text, {
+      ...opts,
+      type: MessageType.Text,
+      threadId: threadValue,
+    });
+  }
+
   async sendPhoto(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
     const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
       ? (attachment as any).msgId
@@ -3047,23 +3176,3 @@ export { MessageType } from './types/message';
 
 export type { MessageTypeValue } from './types/message';
 export type KakaoBot = KakaoForgeClient;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
