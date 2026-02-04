@@ -346,6 +346,17 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Fetch open link info (INFOLINK).
+   */
+  async infoLink(linkIds: Array<number | string>) {
+    const toLong = toLongValue;
+    const body = {
+      lis: (linkIds || []).map(toLong),
+    };
+    return await this.request('INFOLINK', body);
+  }
+
+  /**
    * Fetch chat room info (CHATINFO).
    */
   async chatInfo(chatId: number | string) {

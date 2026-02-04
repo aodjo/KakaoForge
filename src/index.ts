@@ -1187,6 +1187,8 @@ export class KakaoForgeClient extends EventEmitter {
   _openChatInitialized: Set<string>;
   _chatInfoInFlight: Map<string, Promise<void>>;
   _chatTitleChecked: Set<string>;
+  _openLinkInfoCache: Map<string, { name: string }>;
+  _openLinkInfoInFlight: Map<string, Promise<string | null>>;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1276,6 +1278,8 @@ export class KakaoForgeClient extends EventEmitter {
     this._openChatInitialized = new Set();
     this._chatInfoInFlight = new Map();
     this._chatTitleChecked = new Set();
+    this._openLinkInfoCache = new Map();
+    this._openLinkInfoInFlight = new Map();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Map();
@@ -1431,6 +1435,42 @@ export class KakaoForgeClient extends EventEmitter {
       });
 
     this._openChatInitInFlight.set(key, task);
+    return task;
+  }
+
+  async _ensureOpenLinkName(linkId: number | string) {
+    if (!this._carriage) return null;
+    const key = String(normalizeIdValue(linkId));
+    if (!key || key === '0') return null;
+    const cached = this._openLinkInfoCache.get(key);
+    if (cached?.name) return cached.name;
+    const existing = this._openLinkInfoInFlight.get(key);
+    if (existing) return existing;
+
+    const task = (async () => {
+      const res = await this._carriage!.infoLink([linkId]);
+      const list = res?.body?.ols || res?.body?.links || [];
+      if (Array.isArray(list) && list.length > 0) {
+        const info = list[0];
+        const name = String(info?.ln || info?.name || info?.title || '').trim();
+        if (name) {
+          this._openLinkInfoCache.set(key, { name });
+          return name;
+        }
+      }
+      return null;
+    })()
+      .catch((err) => {
+        if (this.debug) {
+          console.error('[DBG] infolink failed:', err.message);
+        }
+        return null;
+      })
+      .finally(() => {
+        this._openLinkInfoInFlight.delete(key);
+      });
+
+    this._openLinkInfoInFlight.set(key, task);
     return task;
   }
 
@@ -1866,6 +1906,15 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     let flags = initialFlags;
+    const openLinkIdValue = normalizeIdValue(
+      data.li || data.openLinkId || roomInfo.openLinkId || 0
+    );
+    if (openLinkIdValue && roomIdValue) {
+      const key = String(roomIdValue);
+      if (!roomInfo.openLinkId) {
+        this._chatRooms.set(key, { ...roomInfo, openLinkId: openLinkIdValue });
+      }
+    }
 
     if (roomIdValue) {
       if (flags.isOpenChat) {
@@ -1899,6 +1948,15 @@ export class KakaoForgeClient extends EventEmitter {
         roomName = flags.isOpenChat
           ? (refreshed.title || roomName)
           : (refreshed.roomName || refreshed.title || roomName);
+      }
+      if (!roomName && flags.isOpenChat && openLinkIdValue) {
+        const openName = await this._ensureOpenLinkName(openLinkIdValue);
+        if (openName) {
+          roomName = openName;
+          const key = String(roomIdValue);
+          const prev = this._chatRooms.get(key) || {};
+          this._chatRooms.set(key, { ...prev, title: openName, roomName: openName, openLinkId: openLinkIdValue });
+        }
       }
       if (!flags.isOpenChat) {
         const titleKey = String(roomIdValue);
