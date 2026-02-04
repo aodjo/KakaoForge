@@ -43,6 +43,8 @@ export type MessageEvent = {
   room: {
     id: number;
     name: string;
+    isGroupChat: boolean;
+    isOpenChat: boolean;
   };
   raw: any;
   // Legacy aliases for compatibility
@@ -281,6 +283,8 @@ type ChatRoomInfo = {
   title?: string;
   roomName?: string;
   displayMembers?: any[];
+  isGroupChat?: boolean;
+  isOpenChat?: boolean;
   lastChatLogId?: number;
   lastSeenLogId?: number;
   lastLogId?: number;
@@ -538,6 +542,60 @@ function parseAttachments(raw: any): any[] {
   if (Array.isArray(parsed)) return parsed;
   if (typeof parsed === 'object') return [parsed];
   return [];
+}
+
+function resolveRoomFlags(source: any, members?: any[]) {
+  const typeRaw = source?.type ?? '';
+  const typeName = String(typeRaw).toLowerCase();
+
+  let isOpenChat = false;
+  if (typeName.includes('open')) {
+    isOpenChat = true;
+  } else if (
+    source?.openChatId ||
+    source?.openLinkId ||
+    source?.openLink ||
+    source?.openLinkType ||
+    source?.openLinkName ||
+    source?.openLinkUrl
+  ) {
+    isOpenChat = true;
+  } else if (source?.meta) {
+    try {
+      const meta = typeof source.meta === 'string' ? JSON.parse(source.meta) : source.meta;
+      if (meta?.openLink || meta?.openLinkId || meta?.openChatId) {
+        isOpenChat = true;
+      }
+    } catch {
+      // ignore
+    }
+  } else if (Array.isArray(source?.chatMetas)) {
+    for (const meta of source.chatMetas) {
+      try {
+        const content = meta?.content ?? meta;
+        const parsed = typeof content === 'string' ? JSON.parse(content) : content;
+        if (parsed?.openLink || parsed?.openLinkId || parsed?.openChatId) {
+          isOpenChat = true;
+          break;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  let isGroupChat = false;
+  if (isOpenChat) {
+    isGroupChat = true;
+  } else if (typeName.includes('multi') || typeName.includes('group') || typeName.includes('moim')) {
+    isGroupChat = true;
+  } else if (typeName.includes('direct') || typeName.includes('memo') || typeName.includes('self')) {
+    isGroupChat = false;
+  } else if (Array.isArray(members)) {
+    isGroupChat = members.length > 1;
+  }
+
+  return { isGroupChat, isOpenChat };
 }
 
 function unwrapAttachment(input: any) {
@@ -1639,11 +1697,12 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    const flags = resolveRoomFlags(roomInfo, roomInfo.displayMembers);
     const msg: MessageEvent = {
       message: { id: logId, text, type, logId },
       attachmentsRaw,
       sender: { id: senderId, name: senderName },
-      room: { id: roomId, name: roomName },
+      room: { id: roomId, name: roomName, isGroupChat: flags.isGroupChat, isOpenChat: flags.isOpenChat },
       raw: data,
       chatId: roomId,
       senderId,
@@ -1792,6 +1851,7 @@ export class KakaoForgeClient extends EventEmitter {
 
       const lastSeenLogId = safeNumber(chat.lastSeenLogId, prev.lastSeenLogId || 0);
 
+      const flags = resolveRoomFlags(chat, displayMembers.length > 0 ? displayMembers : prev.displayMembers);
       const next: ChatRoomInfo = {
         ...prev,
         chatId,
@@ -1799,6 +1859,8 @@ export class KakaoForgeClient extends EventEmitter {
         title: title || prev.title || '',
         roomName,
         displayMembers: displayMembers.length > 0 ? displayMembers : prev.displayMembers,
+        isGroupChat: flags.isGroupChat,
+        isOpenChat: flags.isOpenChat,
         lastChatLogId,
         lastSeenLogId,
       };
