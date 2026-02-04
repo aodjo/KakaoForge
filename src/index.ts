@@ -121,7 +121,12 @@ export type UploadOptions = {
   msgId?: number;
   noSeen?: boolean;
   scope?: number;
+  threadId?: number | string | Long;
+  sendToChatRoom?: boolean;
   supplement?: string;
+  featureStat?: string;
+  silence?: boolean;
+  isSilence?: boolean;
   extra?: string;
   uploadUrl?: string;
   headers?: Record<string, string>;
@@ -3087,6 +3092,13 @@ export class KakaoForgeClient extends EventEmitter {
     let completeWait: { promise: Promise<any>; cancel: () => void } | null = null;
     try {
       await uploadClient.connect(host, port, opts.timeoutMs || 10000, this.socketKeepAliveMs || 30000);
+      const threadId = opts.threadId;
+      let scope = opts.scope;
+      if (scope === undefined && threadId) {
+        scope = opts.sendToChatRoom === true ? 3 : 2;
+      }
+      const deviceType = Number(this.dtype);
+      const silenceValue = opts.isSilence ?? opts.silence;
       const postBody: any = {
         k: token,
         s: toLong(stat.size),
@@ -3101,8 +3113,16 @@ export class KakaoForgeClient extends EventEmitter {
         nt: this.ntype,
         mm: this.mccmnc,
       };
+      if (Number.isFinite(deviceType)) {
+        postBody.dt = deviceType;
+      }
       if (width) postBody.w = Math.floor(width);
       if (height) postBody.h = Math.floor(height);
+      if (scope !== undefined) postBody.scp = scope;
+      if (threadId) postBody.tid = toLong(threadId);
+      if (opts.supplement) postBody.sp = String(opts.supplement);
+      if (opts.featureStat) postBody.featureStat = String(opts.featureStat);
+      if (typeof silenceValue === 'boolean') postBody.silence = silenceValue;
       const extraValue = typeof opts.extra === 'string' ? opts.extra : '';
       const captionValue =
         typeof (opts as any).text === 'string' && (opts as any).text.trim().length > 0
