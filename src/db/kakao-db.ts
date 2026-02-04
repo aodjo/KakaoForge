@@ -71,19 +71,64 @@ export class KakaoDb {
   constructor(dbPath: string) {
     this.dbPath = dbPath;
     this.db = new DatabaseSync(dbPath);
-    this.db.exec('PRAGMA journal_mode=WAL');
-    this.db.exec('PRAGMA synchronous=NORMAL');
-    this.db.exec('PRAGMA temp_store=MEMORY');
-    this.initSchema();
-    this.prepare();
+    try {
+      this.db.exec('PRAGMA journal_mode=WAL');
+      this.db.exec('PRAGMA synchronous=NORMAL');
+      this.db.exec('PRAGMA temp_store=MEMORY');
+      this.initSchema();
+      this.validateSchema();
+      this.prepare();
+    } catch (err) {
+      try {
+        this.db.close();
+      } catch {
+        // ignore
+      }
+      throw err;
+    }
   }
 
   initSchema() {
     for (const sql of KAKAO_SCHEMA_TABLES) {
-      this.db.exec(normalizeSql(sql));
+      try {
+        this.db.exec(normalizeSql(sql));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (/already exists/i.test(message)) {
+          continue;
+        }
+        throw err;
+      }
     }
     for (const sql of KAKAO_SCHEMA_INDEXES) {
-      this.db.exec(normalizeSql(sql));
+      try {
+        this.db.exec(normalizeSql(sql));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (/already exists/i.test(message)) {
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
+  validateSchema() {
+    const rows = this.db.prepare("PRAGMA table_info('chat_logs')").all();
+    const names = new Set(rows.map((row: any) => String(row.name)));
+    const required = [
+      'id',
+      'chat_id',
+      'user_id',
+      'type',
+      'message',
+      'attachment',
+      'created_at',
+      'client_message_id',
+    ];
+    const missing = required.filter((name) => !names.has(name));
+    if (missing.length > 0) {
+      throw new Error(`schema mismatch: chat_logs missing ${missing.join(', ')}`);
     }
   }
 
