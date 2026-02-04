@@ -1662,7 +1662,7 @@ export class KakaoForgeClient extends EventEmitter {
   _emitMessage(data: any) {
     const chatLog = data.chatLog || data;
     const roomIdValue = normalizeIdValue(
-      chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || data.chatId || 0
+      data.chatId || data.c || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0
     );
     const key = roomIdValue ? String(roomIdValue) : '_global';
     const prev = this._messageChains.get(key) || Promise.resolve();
@@ -1685,7 +1685,7 @@ export class KakaoForgeClient extends EventEmitter {
   async _emitMessageInternal(data: any) {
     const chatLog = data.chatLog || data;
     const roomIdValue = normalizeIdValue(
-      chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || data.chatId || 0
+      data.chatId || data.c || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0
     );
     const senderIdValue = normalizeIdValue(
       chatLog.authorId || chatLog.senderId || chatLog.userId || 0
@@ -1709,9 +1709,15 @@ export class KakaoForgeClient extends EventEmitter {
       chatLog.nickname ||
       chatLog.name ||
       '';
+    if (!senderName) {
+      senderName = data.authorNickname || data.authorName || data.nickname || data.nickName || data.name || senderName;
+    }
 
     const roomInfo = this._chatRooms.get(String(roomIdValue)) || {};
     let roomName = roomInfo.roomName || roomInfo.title || '';
+    if (!roomName) {
+      roomName = data.roomName || data.chatRoomName || data.title || roomName;
+    }
 
     if (roomIdValue && (!senderName || !roomName)) {
       await this._waitForMemberContext(roomIdValue, senderIdValue);
