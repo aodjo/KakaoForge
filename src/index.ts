@@ -26,6 +26,7 @@ import {
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
 import { Reactions, type ReactionTypeValue } from './types/reaction';
+import { type MemberTypeValue } from './types/member-type';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
 
@@ -42,7 +43,7 @@ export type MessageEvent = {
   sender: {
     id: number | string;
     name: string;
-    type: MemberType;
+    type: MemberTypeValue;
   };
   room: {
     id: number | string;
@@ -60,7 +61,9 @@ export type MessageEvent = {
   logId: number | string;
 };
 
-export type MemberType = number;
+export { MemberType } from './types/member-type';
+export type { MemberTypeValue } from './types/member-type';
+export type MemberType = MemberTypeValue;
 
 export type SendOptions = {
   msgId?: number;
@@ -327,7 +330,7 @@ export type ChatModule = {
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  type?: MemberType;
+  type?: MemberTypeValue;
 };
 
 type ChatRoomInfo = {
@@ -1566,7 +1569,7 @@ export class KakaoForgeClient extends EventEmitter {
   useSub: boolean;
   refreshToken: string;
   debug: boolean;
-  type: MemberType;
+  type: MemberTypeValue;
   chat: ChatModule;
   autoReconnect: boolean;
   reconnectMinDelayMs: number;
@@ -2861,7 +2864,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
   }
 
-  _resolveMemberType(chatId: number | string, userId: number | string): MemberType {
+  _resolveMemberType(chatId: number | string, userId: number | string): MemberTypeValue {
     const memberType = this._getCachedMemberType(chatId, userId);
     return typeof memberType === 'number' ? memberType : 0;
   }
