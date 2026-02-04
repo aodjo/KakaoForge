@@ -28,6 +28,7 @@ import { MessageType, type MessageTypeValue } from './types/message';
 import { Reactions, type ReactionTypeValue } from './types/reaction';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
+import { KakaoDb } from './db/kakao-db';
 
 export type TransportMode = 'loco' | null;
 
@@ -268,6 +269,7 @@ export type KakaoForgeConfig = {
   transcodeVideos?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
+  dbPath?: string;
 };
 
 type AuthFile = {
@@ -302,7 +304,7 @@ export type ChatModule = {
   fetchMessagesByUser: (
     chatId: number | string,
     userId: number | string,
-    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number }
+    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
@@ -1565,6 +1567,7 @@ export class KakaoForgeClient extends EventEmitter {
   ffprobePath: string;
   debugGetConf: boolean;
   _conf: any;
+  _db: KakaoDb | null;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -1656,6 +1659,17 @@ export class KakaoForgeClient extends EventEmitter {
     this.ffprobePath = config.ffprobePath || '';
     this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
+    this._db = null;
+    if (config.dbPath) {
+      const resolved = path.resolve(config.dbPath);
+      try {
+        this._db = new KakaoDb(resolved);
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] DB init failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
 
     // LOCO clients
     this._booking = null;
@@ -2475,6 +2489,38 @@ export class KakaoForgeClient extends EventEmitter {
       logId: logIdValue,
     };
 
+    if (this._db) {
+      try {
+        const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
+        this._db.storeChatLog(
+          {
+            logId: logIdValue,
+            chatId: roomIdValue,
+            userId: senderIdValue,
+            type,
+            message: text,
+            attachment: attachmentRaw,
+            createdAt: safeNumber(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.created_at ?? 0, 0),
+            deletedAt: safeNumber(chatLog.deletedAt ?? chatLog.deleted_at ?? 0, 0),
+            clientMsgId: chatLog.msgId ?? chatLog.client_message_id ?? 0,
+            prevId: chatLog.prevId ?? chatLog.prev_id ?? 0,
+            referer: chatLog.referer,
+            supplement: chatLog.supplement,
+            v: chatLog.v,
+            threadId: chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0,
+          },
+          {
+            lastMessage: text || (typeof attachmentRaw === 'string' ? attachmentRaw : ''),
+            openLinkId: openLinkIdValue || undefined,
+          }
+        );
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+
     if (roomIdValue) {
       const key = String(roomIdValue);
       const prev = this._chatRooms.get(key) || {};
@@ -2970,11 +3016,44 @@ export class KakaoForgeClient extends EventEmitter {
   async fetchMessagesByUser(
     chatId: number | string,
     userId: number | string,
-    opts: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number } = {}
+    opts: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean } = {}
   ) {
     const normalizedUserId = normalizeIdValue(userId);
     if (!normalizedUserId || normalizedUserId === 0 || normalizedUserId === '0') {
       throw new Error('fetchMessagesByUser requires userId');
+    }
+
+    if (this._db && opts.useDb !== false) {
+      const rows = this._db.getChatLogsByUser(chatId, normalizedUserId, {
+        since: opts.since,
+        max: opts.max,
+        limit: typeof opts.limit === 'number' ? opts.limit : 50,
+      });
+      if (rows.length > 0 || opts.useDb === true) {
+        const roomRow = this._db.getChatRoom(chatId);
+        const openLinkId = roomRow?.link_id ?? roomRow?.linkId;
+        const results: MessageEvent[] = [];
+        for (const row of rows) {
+          const chatLog = {
+            logId: row.id,
+            chatId: row.chat_id,
+            authorId: row.user_id,
+            type: row.type,
+            message: row.message,
+            attachment: row.attachment,
+            sendAt: row.created_at,
+            deletedAt: row.deleted_at,
+            msgId: row.client_message_id,
+            prevId: row.prev_id,
+            referer: row.referer,
+            supplement: row.supplement,
+            v: row.v,
+          };
+          const msg = await this._buildMessageEvent({ chatId, chatLog, openLinkId });
+          if (msg) results.push(msg);
+        }
+        return results;
+      }
     }
 
     if (!this._carriage && !this._locoAutoConnectAttempted) {
