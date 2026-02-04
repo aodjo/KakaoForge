@@ -1690,14 +1690,35 @@ export class KakaoForgeClient extends EventEmitter {
     this.debugGetConf = config.debugGetConf === true;
     this._conf = null;
     this._db = null;
-    const dbPath = config.dbPath === undefined ? path.join(process.cwd(), 'KakaoTalk.db') : config.dbPath;
+    const dbPathAuto = config.dbPath === undefined;
+    const dbPath = dbPathAuto ? path.join(process.cwd(), 'KakaoTalk.db') : config.dbPath;
     if (dbPath) {
       const resolved = path.resolve(String(dbPath));
-      try {
+      const tryInit = () => {
         this._db = new KakaoDb(resolved);
+      };
+      try {
+        tryInit();
       } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] DB init failed:', err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        if (dbPathAuto && fs.existsSync(resolved)) {
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const backup = `${resolved}.bak-${stamp}`;
+          try {
+            fs.renameSync(resolved, backup);
+            tryInit();
+          } catch (retryErr) {
+            if (this.debug) {
+              console.error('[DBG] DB init failed:', message);
+              console.error('[DBG] DB re-init failed:', retryErr instanceof Error ? retryErr.message : String(retryErr));
+            }
+            this._db = null;
+          }
+        } else {
+          if (this.debug) {
+            console.error('[DBG] DB init failed:', message);
+          }
+          this._db = null;
         }
       }
     }
@@ -2124,7 +2145,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     if (this._carriage) {
-      this._carriage.disconnect();
+      await this._carriage.end().catch(() => {});
       this._carriage = null;
     }
     if (this._booking) {
