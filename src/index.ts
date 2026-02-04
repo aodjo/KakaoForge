@@ -1207,13 +1207,19 @@ function normalizeIdValue(value: any): number | string {
 function extractFeedPayload(chatLog: any, attachmentsRaw: any[]): any | null {
   if (chatLog && typeof chatLog === 'object') {
     if (chatLog.feed && typeof chatLog.feed === 'object') return chatLog.feed;
+    if (chatLog.message && typeof chatLog.message === 'object') {
+      const maybeFeed = chatLog.message as any;
+      if (maybeFeed && typeof maybeFeed === 'object' && ('feedType' in maybeFeed || 'ft' in maybeFeed || 'feed' in maybeFeed)) {
+        return maybeFeed.feed || maybeFeed;
+      }
+    }
     if (typeof chatLog.message === 'string') {
       const text = chatLog.message.trim();
       if (text.startsWith('{') || text.startsWith('[')) {
         try {
-          const parsed = JSON.parse(text);
+          const parsed = LosslessJSON.parse(text) as any;
           if (parsed && typeof parsed === 'object' && ('feedType' in parsed || 'ft' in parsed || 'feed' in parsed)) {
-            return parsed;
+            return parsed.feed || parsed;
           }
         } catch {
           // ignore
