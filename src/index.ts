@@ -304,6 +304,7 @@ export type ChatModule = {
     userId: number | string,
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number }
   ) => Promise<MessageEvent[]>;
+  getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1695,6 +1696,7 @@ export class KakaoForgeClient extends EventEmitter {
       openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
+      getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
@@ -3039,6 +3041,38 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return results;
+  }
+
+  /**
+   * Resolve username by userId within a chat (MEMBER).
+   */
+  async getUsernameById(chatId: number | string, userId: number | string) {
+    const normalizedUserId = normalizeIdValue(userId);
+    if (!normalizedUserId || normalizedUserId === 0 || normalizedUserId === '0') {
+      throw new Error('getUsernameById requires userId');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    let cached = this._getCachedMemberName(resolvedChatId, normalizedUserId);
+    if (cached) return cached;
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (this._carriage) {
+      await this._fetchMemberName(resolvedChatId, normalizedUserId);
+      cached = this._getCachedMemberName(resolvedChatId, normalizedUserId);
+    }
+
+    return cached || '';
   }
 
   /**
