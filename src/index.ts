@@ -2568,22 +2568,46 @@ export class KakaoForgeClient extends EventEmitter {
 
   _emitMemberEventFromPush(action: MemberAction, packet: any) {
     const body = packet?.body || {};
-    const roomId = normalizeIdValue(body.chatId || body.c || body.roomId || 0);
+    const chatLog = body.chatLog || body.chatlog;
+    const roomId = normalizeIdValue(
+      body.chatId || body.c || body.roomId || chatLog?.chatId || chatLog?.c || 0
+    );
     if (!roomId) return false;
 
-    const memberIds = extractMemberIdsFromPayload(body);
-    const nameMap = buildMemberNameMap(body);
-    const actorId = extractActorIdFromPayload(body);
-    const actorName = actorId ? nameMap.get(String(actorId)) : '';
+    let resolvedAction = action;
+    let memberIds = extractMemberIdsFromPayload(body);
+    let nameMap = buildMemberNameMap(body);
+    let actorId = extractActorIdFromPayload(body);
+    let actorName = actorId ? nameMap.get(String(actorId)) : '';
 
-    const event = this._buildMemberEvent(action, roomId, {
+    if (chatLog) {
+      const attachmentsRaw = parseAttachments(
+        chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
+      );
+      const feed = extractFeedPayload(chatLog, attachmentsRaw);
+      if (feed) {
+        const feedAction = this._resolveFeedAction(feed);
+        if (feedAction) resolvedAction = feedAction;
+        const feedMemberIds = extractMemberIdsFromPayload(feed);
+        if (feedMemberIds.length > 0) memberIds = feedMemberIds;
+        const feedNameMap = buildMemberNameMap(feed);
+        if (feedNameMap.size > 0) nameMap = feedNameMap;
+        const feedActorId = extractActorIdFromPayload(feed);
+        if (feedActorId) {
+          actorId = feedActorId;
+          actorName = nameMap.get(String(feedActorId)) || actorName;
+        }
+      }
+    }
+
+    const event = this._buildMemberEvent(resolvedAction, roomId, {
       actorId,
       actorName,
       memberIds,
       memberNameMap: nameMap,
       raw: body,
     });
-    this._emitMemberEvent(action, event);
+    this._emitMemberEvent(resolvedAction, event);
     return true;
   }
 
