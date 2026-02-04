@@ -354,6 +354,8 @@ type ChatRoomInfo = {
   isGroupChat?: boolean;
   isOpenChat?: boolean;
   openLinkId?: number | string;
+  openChatId?: number | string;
+  li?: number | string;
   openToken?: number;
   directChat?: boolean;
   needsTitle?: boolean;
