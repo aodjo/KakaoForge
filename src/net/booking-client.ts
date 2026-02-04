@@ -22,9 +22,11 @@ function normalizePortList(list: any[]) {
 
 function normalizeTrailerInfo(raw: any = {}) {
   const info = raw || {};
-  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0);
-  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0);
-  const videoUpMaxSize = Number(info.videoUpMaxSize ?? info.video_up_max_size ?? 0);
+  const fallbackBitrate = Number(info.vBitrate ?? info.v_bitrate ?? 0);
+  const fallbackResolution = Number(info.vResolution ?? info.v_resolution ?? info.resolution ?? 0);
+  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0) || fallbackBitrate;
+  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0) || fallbackResolution;
+  const videoUpMaxSize = Number(info.videoUpMaxSize ?? info.video_up_max_size ?? info.upMaxSize ?? info.up_max_size ?? 0);
   return {
     ...info,
     videoTranscodingBitrate: Number.isFinite(bitrate) ? bitrate : 0,
@@ -35,8 +37,12 @@ function normalizeTrailerInfo(raw: any = {}) {
 
 function normalizeTrailerHighInfo(raw: any = {}) {
   const info = raw || {};
-  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0);
-  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0);
+  const fallbackBitrate = Number(info.vBitrate ?? info.v_bitrate ?? 0);
+  const fallbackResolution = Number(
+    info.vResolution ?? info.v_resolution ?? info.resolutionHD ?? info.resolution_hd ?? info.resolution ?? 0
+  );
+  const bitrate = Number(info.videoTranscodingBitrate ?? info.video_transcoding_bitrate ?? 0) || fallbackBitrate;
+  const resolution = Number(info.videoTranscodingResolution ?? info.video_transcoding_resolution ?? 0) || fallbackResolution;
   return {
     ...info,
     videoTranscodingBitrate: Number.isFinite(bitrate) ? bitrate : 0,
