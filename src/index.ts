@@ -1773,7 +1773,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (packet.method === 'MSG') {
       const { chatId, chatLog } = packet.body || {};
       if (chatLog) {
-        this._emitMessage({ chatId, chatLog });
+        this._emitMessage({ ...packet.body, chatId, chatLog });
       }
     } else if (packet.method === 'CHATINFO' || packet.method === 'UPDATECHAT') {
       const info = packet.body?.chatInfo || packet.body?.chat || packet.body?.chatData || packet.body?.chatRoom;
