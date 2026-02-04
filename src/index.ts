@@ -1255,15 +1255,17 @@ function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boole
   if (Array.isArray(payload?.mids)) {
     payload.mids.forEach(add);
   }
+  if (Array.isArray(payload?.memberIds)) {
+    payload.memberIds.forEach(add);
+  }
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
-      add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid);
+      add(mem?.userId);
     }
   }
-  const fallbackId = opts.excludeUserId
-    ? (payload?.memberId ?? payload?.mid ?? payload?.targetId)
-    : (payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid ?? payload?.targetId);
-  add(fallbackId);
+  if (!opts.excludeUserId) {
+    add(payload?.userId);
+  }
   return out;
 }
 
@@ -1289,6 +1291,39 @@ function extractFeedMemberIds(feed: any) {
   return out;
 }
 
+function extractPushMemberIds(body: any, method: string) {
+  const out: Array<number | string> = [];
+  const seen = new Set<string>();
+  const add = (value: any) => {
+    const id = normalizeIdValue(value);
+    if (!id) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(id);
+  };
+
+  if (method === 'DELMEM' && body?.kid !== undefined) {
+    add(body.kid);
+  }
+
+  if (Array.isArray(body?.memberIds)) {
+    body.memberIds.forEach(add);
+  }
+
+  if (Array.isArray(body?.members)) {
+    for (const mem of body.members) {
+      add(mem?.userId);
+    }
+  }
+
+  if (body?.userId !== undefined) {
+    add(body.userId);
+  }
+
+  return out;
+}
+
 function buildMemberNameMap(payload: any) {
   const map = new Map<string, string>();
   const add = (idValue: any, nameValue: any) => {
@@ -1299,10 +1334,10 @@ function buildMemberNameMap(payload: any) {
   };
   if (Array.isArray(payload?.members)) {
     for (const mem of payload.members) {
-      add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid, mem?.nickName ?? mem?.nickname ?? mem?.name);
+      add(mem?.userId, mem?.nickName ?? mem?.nickname ?? mem?.name);
     }
   }
-  add(payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid, payload?.memberName ?? payload?.nickName);
+  add(payload?.userId, payload?.memberName ?? payload?.nickName);
   return map;
 }
 
@@ -2632,7 +2667,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (!roomId) return false;
 
     let resolvedAction = action;
-    let memberIds = extractMemberIdsFromPayload(body, { excludeUserId: packet.method === 'DELMEM' });
+    let memberIds = extractPushMemberIds(body, packet.method);
     let nameMap = buildMemberNameMap(body);
     let actorId = extractActorIdFromPayload(body);
     let actorName = actorId ? nameMap.get(String(actorId)) : '';
