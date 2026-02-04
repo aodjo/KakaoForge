@@ -1182,6 +1182,9 @@ export class KakaoForgeClient extends EventEmitter {
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
   _chatIdAliases: Map<string, string>;
+  _openChatInitInFlight: Map<string, Promise<void>>;
+  _openChatInitialized: Set<string>;
+  _chatInfoInFlight: Map<string, Promise<void>>;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1267,6 +1270,9 @@ export class KakaoForgeClient extends EventEmitter {
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
     this._chatIdAliases = new Map();
+    this._openChatInitInFlight = new Map();
+    this._openChatInitialized = new Set();
+    this._chatInfoInFlight = new Map();
     this._chatListCursor = { lastTokenId: 0, lastChatId: 0 };
     this._memberNames = new Map();
     this._memberFetchInFlight = new Map();
@@ -1321,6 +1327,108 @@ export class KakaoForgeClient extends EventEmitter {
     const normalized = normalizeIdValue(chatId);
     const key = String(normalized);
     return this._chatIdAliases.get(key) || normalized;
+  }
+
+  async _ensureChatInfo(chatId: number | string) {
+    if (!this._carriage) return;
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = String(resolvedChatId);
+    const existing = this._chatInfoInFlight.get(key);
+    if (existing) return existing;
+
+    const task = (async () => {
+      const res = await this._carriage.chatInfo(resolvedChatId);
+      const info = res?.body?.chatInfo || res?.body?.chat || res?.body?.chatData || res?.body?.chatRoom;
+      if (info) {
+        this._updateChatRooms([info]);
+      }
+    })()
+      .catch((err) => {
+        if (this.debug) {
+          console.error('[DBG] chatInfo failed:', err.message);
+        }
+      })
+      .finally(() => {
+        this._chatInfoInFlight.delete(key);
+      });
+
+    this._chatInfoInFlight.set(key, task);
+    return task;
+  }
+
+  async _ensureOpenChatInfo(chatId: number | string, senderId?: number | string) {
+    if (!this._carriage) return;
+    const resolvedChatId = this._resolveChatId(chatId);
+    const key = String(resolvedChatId);
+    if (this._openChatInitialized.has(key)) {
+      if (senderId && !this._getCachedMemberName(resolvedChatId, senderId)) {
+        try {
+          const memRes = await this._carriage.member(resolvedChatId, [senderId]);
+          const members = memRes?.body?.members || memRes?.body?.memberList || memRes?.body?.memList || [];
+          if (Array.isArray(members) && members.length > 0) {
+            this._cacheMembers(resolvedChatId, members);
+          }
+        } catch (err) {
+          if (this.debug) {
+            console.error('[DBG] open member fetch failed:', err.message);
+          }
+        }
+      }
+      return;
+    }
+
+    const existing = this._openChatInitInFlight.get(key);
+    if (existing) return existing;
+
+    const task = (async () => {
+      const res = await this._carriage.chatOnRoom({ chatId: resolvedChatId, token: 0, opt: 0 });
+      const body = res?.body || {};
+      if (body) {
+        const prev = this._chatRooms.get(key) || {};
+        const updatedChatId = normalizeIdValue(body.c) || resolvedChatId;
+        const next: ChatRoomInfo = {
+          ...prev,
+          chatId: updatedChatId,
+          type: body.t || prev.type,
+          openToken: body.otk ?? prev.openToken,
+        };
+        const flags = resolveRoomFlags({ ...next, openToken: next.openToken });
+        next.isOpenChat = flags.isOpenChat;
+        next.isGroupChat = flags.isGroupChat;
+        this._chatRooms.set(key, next);
+
+        const members = body.m || body.members || body.memberList || [];
+        if (Array.isArray(members) && members.length > 0) {
+          this._cacheMembers(resolvedChatId, members);
+        }
+
+        if (senderId && !this._getCachedMemberName(resolvedChatId, senderId)) {
+          try {
+            const memRes = await this._carriage.member(resolvedChatId, [senderId]);
+            const memList = memRes?.body?.members || memRes?.body?.memberList || memRes?.body?.memList || [];
+            if (Array.isArray(memList) && memList.length > 0) {
+              this._cacheMembers(resolvedChatId, memList);
+            }
+          } catch (err) {
+            if (this.debug) {
+              console.error('[DBG] open member fetch failed:', err.message);
+            }
+          }
+        }
+      }
+      this._openChatInitialized.add(key);
+    })()
+      .catch((err) => {
+        if (this.debug) {
+          console.error('[DBG] chatOnRoom failed:', err.message);
+        }
+      })
+      .finally(() => {
+        this._openChatInitInFlight.delete(key);
+      });
+
+    this._openChatInitInFlight.set(key, task);
+    return task;
   }
 
   /**
@@ -1734,10 +1842,6 @@ export class KakaoForgeClient extends EventEmitter {
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
 
-    if (roomIdValue) {
-      this._ensureMemberList(roomIdValue);
-    }
-
     let senderName =
       chatLog.authorName ||
       chatLog.authorNickname ||
@@ -1755,21 +1859,44 @@ export class KakaoForgeClient extends EventEmitter {
       roomName = data.roomName || data.chatRoomName || data.title || roomName;
     }
 
+    let flags = resolveRoomFlags(roomInfo);
+
+    if (roomIdValue) {
+      if (flags.isOpenChat) {
+        this._ensureOpenChatInfo(roomIdValue, senderIdValue).catch(() => {});
+      } else {
+        this._ensureMemberList(roomIdValue);
+      }
+    }
+
     if (roomIdValue && (!senderName || !roomName)) {
-      await this._waitForMemberContext(roomIdValue, senderIdValue);
+      if (flags.isOpenChat) {
+        await this._ensureOpenChatInfo(roomIdValue, senderIdValue);
+      } else {
+        await this._waitForMemberContext(roomIdValue, senderIdValue);
+      }
+
+      if (!roomName) {
+        await this._ensureChatInfo(roomIdValue);
+      }
+
+      const refreshed = this._chatRooms.get(String(roomIdValue)) || roomInfo;
+      flags = resolveRoomFlags(refreshed);
+
       if (!senderName && senderIdValue) {
         senderName = this._getCachedMemberName(roomIdValue, senderIdValue) || senderName;
+      }
+      if (!roomName) {
+        roomName = refreshed.roomName || refreshed.title || roomName;
       }
       if (!roomName) {
         const derived = this._buildRoomNameFromMembers(String(roomIdValue));
         if (derived) {
           roomName = derived;
-          this._chatRooms.set(String(roomIdValue), { ...roomInfo, roomName });
+          this._chatRooms.set(String(roomIdValue), { ...refreshed, roomName });
         }
       }
     }
-
-    const flags = resolveRoomFlags(roomInfo);
     const msg: MessageEvent = {
       message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,

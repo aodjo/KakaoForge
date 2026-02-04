@@ -346,6 +346,28 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Fetch chat room info (CHATINFO).
+   */
+  async chatInfo(chatId: number | string) {
+    const toLong = toLongValue;
+    const body = { chatId: toLong(chatId) };
+    return await this.request('CHATINFO', body);
+  }
+
+  /**
+   * Enter chat room context and fetch members (CHATONROOM).
+   */
+  async chatOnRoom({ chatId, token = 0, opt = 0 }: any) {
+    const toLong = toLongValue;
+    const body = {
+      chatId: toLong(chatId),
+      token: toLong(token || 0),
+      opt: toLong(opt || 0),
+    };
+    return await this.request('CHATONROOM', body);
+  }
+
+  /**
    * Send PING to keep connection alive.
    */
   async ping() {
