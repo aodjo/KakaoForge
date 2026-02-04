@@ -2727,6 +2727,11 @@ export class KakaoForgeClient extends EventEmitter {
       memberIds = [normalizeIdValue(chatLog.authorId)];
     }
 
+    if (!actorId && chatAuthorId) {
+      actorId = chatAuthorId;
+      actorName = nameMap.get(String(chatAuthorId)) || actorName;
+    }
+
     if (!actorId) {
       if ((resolvedAction === 'join' || resolvedAction === 'leave') && memberIds.length === 1) {
         actorId = memberIds[0];
