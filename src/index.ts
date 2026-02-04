@@ -110,20 +110,9 @@ export type BackfillResult = {
   oldestLogId?: number | string;
 };
 
-export type SyncMode = 'new' | 'history' | 'full';
-
-export type SyncAllOptions = {
-  mode?: SyncMode;
-  emit?: boolean;
-  count?: number;
-  limitPerChat?: number;
-  maxPages?: number;
-};
-
 export type SyncAllResult = {
   chats: number;
   newMessages: number;
-  historyStored: number;
 };
 
 export type OpenChatKickOptions = {
@@ -273,11 +262,6 @@ export type KakaoForgeConfig = {
   deviceUuid?: string;
   authPath?: string;
   autoConnect?: boolean;
-  autoSync?: SyncMode | boolean;
-  autoSyncEmit?: boolean;
-  autoSyncCount?: number;
-  autoSyncLimitPerChat?: number;
-  autoSyncMaxPages?: number;
   autoReconnect?: boolean;
   reconnectMinDelayMs?: number;
   reconnectMaxDelayMs?: number;
@@ -343,7 +327,7 @@ export type ChatModule = {
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
   backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
-  syncAll: (opts?: SyncAllOptions) => Promise<SyncAllResult>;
+  syncAll: () => Promise<SyncAllResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
@@ -1604,11 +1588,6 @@ export class KakaoForgeClient extends EventEmitter {
   ffmpegPath: string;
   ffprobePath: string;
   debugGetConf: boolean;
-  _autoSyncMode: SyncMode | null;
-  _autoSyncEmit: boolean;
-  _autoSyncCount: number;
-  _autoSyncLimitPerChat: number;
-  _autoSyncMaxPages: number;
   _conf: any;
   _db: KakaoDb | null;
 
@@ -1714,20 +1693,6 @@ export class KakaoForgeClient extends EventEmitter {
         }
       }
     }
-    const autoSyncValue = config.autoSync;
-    let autoSyncMode: SyncMode | null = 'full';
-    if (autoSyncValue === false) {
-      autoSyncMode = null;
-    } else if (typeof autoSyncValue === 'string') {
-      autoSyncMode = autoSyncValue;
-    }
-    this._autoSyncMode = autoSyncMode;
-    this._autoSyncEmit = config.autoSyncEmit === true;
-    this._autoSyncCount = typeof config.autoSyncCount === 'number' ? config.autoSyncCount : 50;
-    this._autoSyncLimitPerChat = typeof config.autoSyncLimitPerChat === 'number'
-      ? config.autoSyncLimitPerChat
-      : 500;
-    this._autoSyncMaxPages = typeof config.autoSyncMaxPages === 'number' ? config.autoSyncMaxPages : 10;
 
     // LOCO clients
     this._booking = null;
@@ -1769,7 +1734,7 @@ export class KakaoForgeClient extends EventEmitter {
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
       backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
-      syncAll: (opts) => this.syncAll(opts),
+      syncAll: () => this.syncAll(),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
@@ -2324,22 +2289,8 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   async _runAutoSync() {
-    let mode = this._autoSyncMode;
-    if (!mode) return;
-    if ((mode === 'history' || mode === 'full') && !this._db) {
-      if (this.debug) {
-        console.warn('[DBG] autoSync downgraded to new (dbPath disabled)');
-      }
-      mode = 'new';
-    }
     try {
-      await this.syncAll({
-        mode,
-        emit: this._autoSyncEmit,
-        count: this._autoSyncCount,
-        limitPerChat: this._autoSyncLimitPerChat,
-        maxPages: this._autoSyncMaxPages,
-      });
+      await this.syncAll();
     } catch (err) {
       if (this.debug) {
         console.error('[DBG] autoSync failed:', err instanceof Error ? err.message : String(err));
@@ -3397,16 +3348,9 @@ export class KakaoForgeClient extends EventEmitter {
   /**
    * Sync all chats (KakaoTalk-like flow).
    */
-  async syncAll(opts: SyncAllOptions = {}): Promise<SyncAllResult> {
-    const mode: SyncMode = opts.mode || 'new';
-    const emit = opts.emit ?? false;
-    const count = typeof opts.count === 'number' ? opts.count : 50;
-    const limitPerChat = typeof opts.limitPerChat === 'number' ? opts.limitPerChat : 500;
-    const maxPages = typeof opts.maxPages === 'number' ? opts.maxPages : 10;
-
-    if ((mode === 'history' || mode === 'full') && !this._db) {
-      throw new Error('syncAll(history) requires dbPath (createClient { dbPath })');
-    }
+  async syncAll(): Promise<SyncAllResult> {
+    const emit = false;
+    const count = 50;
 
     if (!this._carriage && !this._locoAutoConnectAttempted) {
       this._locoAutoConnectAttempted = true;
@@ -3443,44 +3387,32 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     let newMessages = 0;
-    let historyStored = 0;
 
     for (const chatId of chatIds) {
       const resolvedChatId = this._resolveChatId(chatId);
-      if (mode === 'new' || mode === 'full') {
-        let since: number | string = 0;
-        if (this._db) {
-          const latest = this._db.getLatestChatLogId(resolvedChatId);
-          if (latest && latest !== 0 && latest !== '0') {
-            since = latest;
-          }
+      let since: number | string = 0;
+      if (this._db) {
+        const latest = this._db.getLatestChatLogId(resolvedChatId);
+        if (latest && latest !== 0 && latest !== '0') {
+          since = latest;
         }
-        if (!since || since === 0 || since === '0') {
-          const room = this._chatRooms.get(String(resolvedChatId));
-          if (room?.lastLogId) {
-            since = normalizeIdValue(room.lastLogId);
-          }
+      }
+      if (!since || since === 0 || since === '0') {
+        const room = this._chatRooms.get(String(resolvedChatId));
+        if (room?.lastLogId) {
+          since = normalizeIdValue(room.lastLogId);
         }
-        const res = await this.syncMessages(resolvedChatId, {
-          since,
-          count,
-          emit,
-        });
-        const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
-        if (Array.isArray(logs)) newMessages += logs.length;
       }
-
-      if (mode === 'history' || mode === 'full') {
-        const result = await this.backfillMessages(resolvedChatId, {
-          count,
-          limit: limitPerChat,
-          maxPages,
-        });
-        historyStored += result.stored;
-      }
+      const res = await this.syncMessages(resolvedChatId, {
+        since,
+        count,
+        emit,
+      });
+      const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
+      if (Array.isArray(logs)) newMessages += logs.length;
     }
 
-    return { chats: chatIds.size, newMessages, historyStored };
+    return { chats: chatIds.size, newMessages };
   }
 
   /**
