@@ -1229,7 +1229,7 @@ export class KakaoForgeClient extends EventEmitter {
   _chatTitleChecked: Set<string>;
   _openLinkInfoCache: Map<string, { name: string }>;
   _openLinkInfoInFlight: Map<string, Promise<string | null>>;
-  _openLinkSyncToken: number | string;
+  _openLinkSyncToken: number;
   _chatListCursor: ChatListCursor;
   _memberNames: MemberNameCache;
   _memberFetchInFlight: Map<string, Promise<void>>;
@@ -1537,7 +1537,8 @@ export class KakaoForgeClient extends EventEmitter {
         }
       }
       if (body.ltk !== undefined) {
-        this._openLinkSyncToken = normalizeIdValue(body.ltk) || this._openLinkSyncToken;
+        const nextToken = safeNumber(body.ltk, this._openLinkSyncToken);
+        this._openLinkSyncToken = Number.isFinite(nextToken) ? nextToken : this._openLinkSyncToken;
       }
     } catch (err) {
       if (this.debug) {
