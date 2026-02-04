@@ -66,8 +66,11 @@ export type MemberAction = 'join' | 'leave' | 'invite' | 'kick';
 export type MemberEvent = {
   type: MemberAction;
   room: MessageEvent['room'];
-  actorId?: number | string;
   actor?: MessageEvent['sender'];
+  member?: {
+    ids: Array<number | string>;
+    names: string[];
+  };
   memberIds?: Array<number | string>;
   members?: MessageEvent['sender'][];
   message?: MessageEvent;
@@ -2777,17 +2780,23 @@ export class KakaoForgeClient extends EventEmitter {
     if (opts.message) event.message = opts.message;
 
     if (opts.actorId) {
-      event.actorId = opts.actorId;
       event.actor = this._buildMemberRef(chatId, opts.actorId, opts.actorName);
     }
 
     if (opts.memberIds && opts.memberIds.length > 0) {
-      event.memberIds = opts.memberIds.slice();
+      const ids = opts.memberIds.slice();
+      const names: string[] = [];
       const members: MessageEvent['sender'][] = [];
       for (const memberId of opts.memberIds) {
-        const name = opts.memberNameMap?.get(String(memberId));
+        const name =
+          opts.memberNameMap?.get(String(memberId)) ||
+          this._getCachedMemberName(chatId, memberId) ||
+          '';
+        names.push(name);
         members.push(this._buildMemberRef(chatId, memberId, name));
       }
+      event.member = { ids, names };
+      event.memberIds = ids;
       event.members = members;
     }
 
