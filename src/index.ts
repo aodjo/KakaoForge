@@ -46,6 +46,7 @@ export type MessageEvent = {
     name: string;
     isGroupChat: boolean;
     isOpenChat: boolean;
+    openLinkId?: number | string;
   };
   raw: any;
   // Legacy aliases for compatibility
@@ -1030,14 +1031,14 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
         rawLog.extra ??
         input.attachmentsRaw
     );
-    const linkId = input.raw?.li ?? rawLog?.li ?? inner?.li;
+    const linkId = input.raw?.li ?? rawLog?.li ?? inner?.li ?? input.room?.openLinkId;
     return { logId, userId, text, type, mentions, linkId };
   }
 
   if (input.message && input.sender) {
     const message = input.message || {};
     const sender = input.sender || {};
-    const linkId = input.raw?.li;
+    const linkId = input.raw?.li ?? input.room?.openLinkId;
     return {
       logId: normalizeIdValue(message.logId || message.id || input.logId || 0),
       userId: normalizeIdValue(sender.id || input.senderId || 0),
@@ -1055,7 +1056,7 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
   const text = input.message || input.text || input.msg || '';
   const type = safeNumber(input.type || input.msgType || MessageType.Text, MessageType.Text);
   const mentions = input.mentions || input.src_mentions || extractMentions(input.attachmentsRaw);
-  const linkId = input.raw?.li;
+  const linkId = input.raw?.li ?? input.room?.openLinkId;
 
   return { logId, userId, text, type, mentions, linkId };
 }
@@ -1482,6 +1483,7 @@ export class KakaoForgeClient extends EventEmitter {
           chatId: updatedChatId,
           type: body.t || prev.type,
           openToken: body.otk ?? prev.openToken,
+          openLinkId: normalizeIdValue(body.li || body.linkId || prev.openLinkId || 0) || prev.openLinkId,
         };
         const flags = resolveRoomFlags({ ...next, openToken: next.openToken });
         next.isOpenChat = flags.isOpenChat;
@@ -2024,7 +2026,12 @@ export class KakaoForgeClient extends EventEmitter {
 
     let flags = initialFlags;
     const openLinkIdValue = normalizeIdValue(
-      data.li || data.openLinkId || roomInfo.openLinkId || 0
+      data.li ||
+        data.openLinkId ||
+        chatLog.li ||
+        chatLog.linkId ||
+        roomInfo.openLinkId ||
+        0
     );
     if (openLinkIdValue && roomIdValue) {
       const key = String(roomIdValue);
@@ -2118,7 +2125,13 @@ export class KakaoForgeClient extends EventEmitter {
       message: { id: logIdValue, text, type, logId: logIdValue },
       attachmentsRaw,
       sender: { id: senderIdValue, name: senderName },
-      room: { id: roomIdValue, name: roomName, isGroupChat: flags.isGroupChat, isOpenChat: flags.isOpenChat },
+      room: {
+        id: roomIdValue,
+        name: roomName,
+        isGroupChat: flags.isGroupChat,
+        isOpenChat: flags.isOpenChat,
+        openLinkId: openLinkIdValue || undefined,
+      },
       raw: data,
       chatId: roomIdValue,
       senderId: senderIdValue,
