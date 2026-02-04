@@ -2823,10 +2823,13 @@ export class KakaoForgeClient extends EventEmitter {
     const type = typeof opts.type === 'number'
       ? opts.type
       : (normalized.type ?? MessageType.Text);
-    const extra =
+    let extra =
       opts.extra !== undefined
         ? (typeof opts.extra === 'string' ? opts.extra : buildExtra(opts.extra as any))
         : normalized.extra;
+    if (extra === undefined) {
+      extra = '{}';
+    }
     const resolvedChatId = this._resolveChatId(chatId);
     return await this._carriage.modifyMsg(resolvedChatId, normalized.logId, text, {
       type,
