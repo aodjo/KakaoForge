@@ -110,6 +110,11 @@ export type BackfillResult = {
   oldestLogId?: number | string;
 };
 
+export type BackfillAllResult = {
+  chats: number;
+  stored: number;
+};
+
 export type SyncAllResult = {
   chats: number;
   newMessages: number;
@@ -327,6 +332,7 @@ export type ChatModule = {
     opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number; useDb?: boolean }
   ) => Promise<MessageEvent[]>;
   backfillMessages: (chatId: number | string, opts?: BackfillOptions) => Promise<BackfillResult>;
+  backfillAllMessages: () => Promise<BackfillAllResult>;
   syncAll: () => Promise<SyncAllResult>;
   getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
@@ -1734,6 +1740,7 @@ export class KakaoForgeClient extends EventEmitter {
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
       fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
       backfillMessages: (chatId, opts) => this.backfillMessages(chatId, opts),
+      backfillAllMessages: () => this.backfillAllMessages(),
       syncAll: () => this.syncAll(),
       getUsernameById: (chatId, userId) => this.getUsernameById(chatId, userId),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
@@ -3343,6 +3350,68 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     return { stored, pages, newestLogId, oldestLogId };
+  }
+
+  /**
+   * Backfill all chat rooms (store full history into DB).
+   */
+  async backfillAllMessages(): Promise<BackfillAllResult> {
+    if (!this._db) {
+      throw new Error('backfillAllMessages requires dbPath (createClient { dbPath })');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const list = await this.getChatRooms();
+    const chatIds = new Set<number | string>();
+    if (Array.isArray(list?.chats)) {
+      for (const chat of list.chats) {
+        const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
+        if (id && id !== 0 && id !== '0') {
+          chatIds.add(id);
+        }
+      }
+    }
+    if (chatIds.size === 0) {
+      for (const key of this._chatRooms.keys()) {
+        const id = normalizeIdValue(key);
+        if (id && id !== 0 && id !== '0') {
+          chatIds.add(id);
+        }
+      }
+    }
+
+    let stored = 0;
+    for (const chatId of chatIds) {
+      let prevOldest: number | string | null = null;
+      while (true) {
+        const result = await this.backfillMessages(chatId);
+        stored += result.stored;
+        if (!result.stored) break;
+        if (result.oldestLogId !== undefined && result.oldestLogId !== null) {
+          const oldestKey = String(result.oldestLogId);
+          if (prevOldest !== null && String(prevOldest) === oldestKey) break;
+          prevOldest = result.oldestLogId;
+        } else {
+          break;
+        }
+      }
+    }
+
+    return { chats: chatIds.size, stored };
   }
 
   /**
