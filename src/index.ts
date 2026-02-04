@@ -286,6 +286,10 @@ export type ChatModule = {
   sendVideo: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendAudio: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendFile: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendPhotoAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendVideoAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendAudioAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  sendFileAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendContact: (chatId: number | string, contact: ContactPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendKakaoProfile: (chatId: number | string, profile: ProfilePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
@@ -1465,6 +1469,10 @@ export class KakaoForgeClient extends EventEmitter {
       sendVideo: (chatId, attachment, opts) => this.sendVideo(chatId, attachment, opts),
       sendAudio: (chatId, attachment, opts) => this.sendAudio(chatId, attachment, opts),
       sendFile: (chatId, attachment, opts) => this.sendFile(chatId, attachment, opts),
+      sendPhotoAtThread: (chatId, threadId, attachment, opts) => this.sendPhotoAtThread(chatId, threadId, attachment, opts),
+      sendVideoAtThread: (chatId, threadId, attachment, opts) => this.sendVideoAtThread(chatId, threadId, attachment, opts),
+      sendAudioAtThread: (chatId, threadId, attachment, opts) => this.sendAudioAtThread(chatId, threadId, attachment, opts),
+      sendFileAtThread: (chatId, threadId, attachment, opts) => this.sendFileAtThread(chatId, threadId, attachment, opts),
       sendContact: (chatId, contact, opts) => this.sendContact(chatId, contact, opts),
       sendKakaoProfile: (chatId, profile, opts) => this.sendKakaoProfile(chatId, profile, opts),
       sendLocation: (chatId, location, opts) => this.sendLocation(chatId, location, opts),
@@ -3333,6 +3341,15 @@ export class KakaoForgeClient extends EventEmitter {
     return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, sendOpts, 'photo');
   }
 
+  async sendPhotoAtThread(
+    chatId: number | string,
+    threadId: number | string,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {}
+  ) {
+    return this.sendPhoto(chatId, attachment, { ...opts, threadId });
+  }
+
   async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
     const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
       ? (attachment as any).msgId
@@ -3347,6 +3364,15 @@ export class KakaoForgeClient extends EventEmitter {
     const prepared = await this._prepareMediaAttachment('video', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, sendOpts, 'video');
+  }
+
+  async sendVideoAtThread(
+    chatId: number | string,
+    threadId: number | string,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {}
+  ) {
+    return this.sendVideo(chatId, attachment, { ...opts, threadId });
   }
 
   async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
@@ -3365,6 +3391,15 @@ export class KakaoForgeClient extends EventEmitter {
     return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, sendOpts, 'audio');
   }
 
+  async sendAudioAtThread(
+    chatId: number | string,
+    threadId: number | string,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {}
+  ) {
+    return this.sendAudio(chatId, attachment, { ...opts, threadId });
+  }
+
   async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
     const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
       ? (attachment as any).msgId
@@ -3379,6 +3414,15 @@ export class KakaoForgeClient extends EventEmitter {
     const prepared = await this._prepareMediaAttachment('file', attachment, sendOpts, chatId);
     const normalized = normalizeFileAttachment(unwrapAttachment(prepared));
     return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, sendOpts, 'file');
+  }
+
+  async sendFileAtThread(
+    chatId: number | string,
+    threadId: number | string,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {}
+  ) {
+    return this.sendFile(chatId, attachment, { ...opts, threadId });
   }
 
   async sendContact(chatId: number | string, contact: ContactPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
