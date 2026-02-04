@@ -970,22 +970,31 @@ function normalizeIdValue(value: any): number | string {
   return Number(value) || 0;
 }
 
+function truncateReplyMessage(text: string, maxLen = 100) {
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen);
+}
+
 function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
   if (!target || !target.logId || !target.userId) {
     throw new Error('reply target requires logId and userId');
   }
+  const srcMessage = truncateReplyMessage(target.text || '');
   const attachment: any = {
-    attach_only: !!opts.attachOnly,
-    attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
     src_logId: toLong(target.logId),
     src_userId: toLong(target.userId),
-    src_message: target.text || '',
+    src_message: srcMessage,
     src_type: typeof target.type === 'number' ? target.type : MessageType.Text,
+    src_linkId: toLong(target.linkId ?? 0),
     src_mentions: Array.isArray(target.mentions) ? target.mentions : [],
+    mentions: null,
+    attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
+    attach_only: !!opts.attachOnly,
+    attach_content: null,
+    src_emojis: null,
+    src_spoilers: null,
   };
-  if (target.linkId !== undefined && target.linkId !== null) {
-    attachment.src_linkId = toLong(target.linkId);
-  }
   return attachment;
 }
 
@@ -993,14 +1002,34 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
   if (!input) return null;
 
   if (input.raw && input.raw.chatLog) {
-    const chatLog = input.raw.chatLog;
-    const logId = normalizeIdValue(chatLog.logId || chatLog.msgId || input.logId || input.message?.id || 0);
+    const rawLog = input.raw.chatLog;
+    const inner = rawLog?.chatLog || rawLog;
+    const logId = normalizeIdValue(inner.logId || inner.msgId || rawLog.logId || rawLog.msgId || input.logId || input.message?.id || 0);
     const userId = normalizeIdValue(
-      chatLog.authorId || chatLog.senderId || chatLog.userId || input.sender?.id || input.senderId || 0
+      inner.authorId ||
+        inner.senderId ||
+        inner.userId ||
+        rawLog.authorId ||
+        rawLog.senderId ||
+        rawLog.userId ||
+        input.sender?.id ||
+        input.senderId ||
+        0
     );
-    const text = chatLog.message || chatLog.msg || chatLog.text || input.message?.text || input.text || '';
-    const type = safeNumber(chatLog.type || chatLog.msgType || input.message?.type || input.type || MessageType.Text, MessageType.Text);
-    const mentions = extractMentions(chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? input.attachmentsRaw);
+    const text = inner.message || inner.msg || inner.text || rawLog.message || rawLog.msg || rawLog.text || input.message?.text || input.text || '';
+    const type = safeNumber(
+      inner.type || inner.msgType || rawLog.type || rawLog.msgType || input.message?.type || input.type || MessageType.Text,
+      MessageType.Text
+    );
+    const mentions = extractMentions(
+      inner.attachment ??
+        inner.attachments ??
+        inner.extra ??
+        rawLog.attachment ??
+        rawLog.attachments ??
+        rawLog.extra ??
+        input.attachmentsRaw
+    );
     const linkId = input.raw?.li;
     return { logId, userId, text, type, mentions, linkId };
   }
