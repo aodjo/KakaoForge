@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as LosslessJSON from 'lossless-json';
 import { spawn, spawnSync } from 'child_process';
 import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
@@ -796,12 +797,21 @@ function assertCalendarOk(res: any, label: string) {
   }
 }
 
+function stringifyLossless(obj: unknown) {
+  return LosslessJSON.stringify(obj, (key, value) => {
+    if (typeof value === 'bigint' || Long.isLong(value)) {
+      return new (LosslessJSON as any).LosslessNumber(value.toString());
+    }
+    return value;
+  });
+}
+
 function buildExtra(attachment?: AttachmentInput, extra?: string) {
   if (typeof extra === 'string' && extra.length > 0) return extra;
   if (attachment === undefined || attachment === null) return undefined;
   if (typeof attachment === 'string') return attachment;
   try {
-    return JSON.stringify(attachment);
+    return stringifyLossless(attachment);
   } catch {
     return String(attachment);
   }
@@ -967,14 +977,14 @@ function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
   const attachment: any = {
     attach_only: !!opts.attachOnly,
     attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
-    src_logId: normalizeIdValue(target.logId),
-    src_userId: normalizeIdValue(target.userId),
+    src_logId: toLong(target.logId),
+    src_userId: toLong(target.userId),
     src_message: target.text || '',
     src_type: typeof target.type === 'number' ? target.type : MessageType.Text,
     src_mentions: Array.isArray(target.mentions) ? target.mentions : [],
   };
   if (target.linkId !== undefined && target.linkId !== null) {
-    attachment.src_linkId = normalizeIdValue(target.linkId);
+    attachment.src_linkId = toLong(target.linkId);
   }
   return attachment;
 }

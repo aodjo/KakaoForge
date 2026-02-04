@@ -19,6 +19,7 @@
   "dependencies": {
     "bson": "^7.1.1",
     "hpack.js": "^2.1.6",
+    "lossless-json": "^4.1.0",
     "protobufjs": "^8.0.0",
     "qrcode-terminal": "^0.12.0"
   },
