@@ -1859,8 +1859,10 @@ export class KakaoForgeClient extends EventEmitter {
     const conf = await this._ensureVideoConf();
     const trailerInfo = conf?.trailerInfo || {};
     const trailerHighInfo = conf?.trailerHighInfo || {};
-    const base = quality === 'high'
-      ? (Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo)
+    const highBitrate = Number(trailerHighInfo?.videoTranscodingBitrate || 0);
+    const highResolution = Number(trailerHighInfo?.videoTranscodingResolution || 0);
+    const base = quality === 'high' && highBitrate > 0 && highResolution > 0
+      ? trailerHighInfo
       : trailerInfo;
     const bitrate = Number(base?.videoTranscodingBitrate || 0);
     const resolution = Number(base?.videoTranscodingResolution || 0);
