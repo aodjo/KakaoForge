@@ -2749,6 +2749,10 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    if (memberIds.length === 0 && actorId && (resolvedAction === 'join' || resolvedAction === 'leave')) {
+      memberIds = [actorId];
+    }
+
     if (this.debug && (!actorId || memberIds.length === 0)) {
       console.log(`[DBG] memberEvent incomplete (${packet.method})`, previewLossless({ body, chatLog }));
     }
@@ -2823,12 +2827,21 @@ export class KakaoForgeClient extends EventEmitter {
     if (!roomName) {
       roomName = roomInfo.roomName || roomInfo.title || '';
     }
+    const openLinkIdValue = normalizeIdValue(
+      roomInfo.openLinkId || roomInfo.openChatId || roomInfo.li || 0
+    );
+    if (!roomName && flags.isOpenChat && openLinkIdValue) {
+      const cached = this._openLinkInfoCache.get(String(openLinkIdValue));
+      if (cached?.name) {
+        roomName = cached.name;
+      }
+    }
     return {
       id: resolvedChatId,
       name: roomName,
       isGroupChat: flags.isGroupChat,
       isOpenChat: flags.isOpenChat,
-      openLinkId: roomInfo.openLinkId || roomInfo.openChatId || roomInfo.li,
+      openLinkId: openLinkIdValue || undefined,
     };
   }
 
