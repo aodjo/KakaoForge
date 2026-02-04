@@ -7,8 +7,7 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
-import { uploadMultipartFile } from './net/upload-client';
-import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId, buildAuthorizationHeader, buildUserAgent, buildAHeader } from './auth/login';
+import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
 import { guessMime, readImageSize } from './util/media';
@@ -54,7 +53,7 @@ export type SendOptions = {
   type?: number;
 };
 
-export type AttachmentInput = Record<string, any> | string | UploadResult | { attachment: any };
+export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
 
 export type AttachmentSendOptions = SendOptions & UploadOptions & {
   text?: string;
@@ -63,6 +62,12 @@ export type AttachmentSendOptions = SendOptions & UploadOptions & {
 export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file';
 
 export type UploadOptions = {
+  chatId?: number | string;
+  msgId?: number;
+  noSeen?: boolean;
+  scope?: number;
+  supplement?: string;
+  extra?: string;
   uploadUrl?: string;
   headers?: Record<string, string>;
   fields?: Record<string, any>;
@@ -81,6 +86,7 @@ export type UploadOptions = {
 export type UploadResult = {
   accessKey: string;
   attachment: Record<string, any>;
+  msgId?: number;
   info?: any;
   raw: any;
 };
@@ -235,6 +241,16 @@ function toLong(value: any) {
 function safeNumber(value: any, fallback = 0) {
   const num = typeof value === 'number' ? value : parseInt(value, 10);
   return Number.isFinite(num) ? num : fallback;
+}
+
+async function sha1FileHex(filePath: string) {
+  return await new Promise<string>((resolve, reject) => {
+    const hash = crypto.createHash('sha1');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('error', (err) => reject(err));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
 }
 
 function parseAttachments(raw: any): any[] {
@@ -489,6 +505,25 @@ function normalizeLinkAttachment(input: any) {
     return rest;
   }
   return input;
+}
+
+async function streamEncryptedFile(
+  client: CarriageClient,
+  filePath: string,
+  startOffset: number,
+  totalSize: number,
+  onProgress?: (sent: number, total: number) => void
+) {
+  const stream = fs.createReadStream(filePath, {
+    start: startOffset > 0 ? startOffset : 0,
+    highWaterMark: 64 * 1024,
+  });
+  let sent = startOffset > 0 ? startOffset : 0;
+  for await (const chunk of stream) {
+    await client.writeEncrypted(chunk as Buffer);
+    sent += (chunk as Buffer).length;
+    if (onProgress) onProgress(sent, totalSize);
+  }
 }
 
 /**
@@ -1546,51 +1581,12 @@ export class KakaoForgeClient extends EventEmitter {
     return await this._carriage.write(chatId, text, msgType, writeOpts);
   }
 
-  _resolveUploadUrl(type: UploadMediaType, override?: string) {
-    if (override) return override;
-    if (type === 'photo') return 'https://up-api-kage-moim.kakao.com/up/talk-moim-img/';
-    if (type === 'video') return 'https://up-api-kage-moim.kakao.com/up/talk-moim-video/';
-    return 'https://up-api-kage-moim.kakao.com/up/talk-moim-file/';
-  }
-
-  _buildUploadHeaders(opts: UploadOptions = {}) {
-    const headerA = buildAHeader(this.appVer, this.lang);
-    const headers: Record<string, string> = {
-      // Kage client uses A header format for User-Agent.
-      'User-Agent': headerA,
-      'A': headerA,
-      'Accept': '*/*',
-      'Accept-Language': this.lang,
-    };
-    const provided = opts.headers || {};
-    const lowerKeys = new Set(Object.keys(provided).map((key) => key.toLowerCase()));
-    if (!lowerKeys.has('content-transfer-encoding')) {
-      headers['Content-Transfer-Encoding'] = 'binary';
-    }
-    if (!lowerKeys.has('connection')) {
-      headers['Connection'] = 'Close';
-    }
-    if (!lowerKeys.has('device-model-name')) {
-      const modelName = this.deviceId || this.deviceUuid || 'SM-G998N';
-      headers['Device-model-name'] = modelName;
-    }
-    if (!lowerKeys.has('c')) {
-      headers['C'] = crypto.randomUUID();
-    }
-    const useAuth = opts.auth !== false;
-    if (useAuth && this.oauthToken) {
-      const deviceId = this.deviceId || this.deviceUuid;
-      if (deviceId) {
-        headers['Authorization'] = buildAuthorizationHeader(this.oauthToken, deviceId);
-      }
-    }
-    if (opts.headers) {
-      Object.assign(headers, opts.headers);
-    }
-    return headers;
-  }
-
-  async _uploadMedia(type: UploadMediaType, filePath: string, opts: UploadOptions = {}): Promise<UploadResult> {
+  async _uploadMedia(
+    type: UploadMediaType,
+    filePath: string,
+    opts: UploadOptions = {},
+    chatId?: number | string
+  ): Promise<UploadResult> {
     if (!filePath) {
       throw new Error('filePath is required');
     }
@@ -1605,6 +1601,36 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error(`not a file: ${filePath}`);
     }
 
+    const uploadChatId = chatId ?? opts.chatId;
+    if (!uploadChatId) {
+      throw new Error('chatId is required for LOCO upload. Use sendPhoto(chatId, path) or pass { chatId }.');
+    }
+
+    const msgId = opts.msgId !== undefined && opts.msgId !== null ? opts.msgId : this._nextClientMsgId();
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const logType = type === 'photo'
+      ? MessageType.Photo
+      : type === 'video'
+        ? MessageType.Video
+        : type === 'audio'
+          ? MessageType.Audio
+          : MessageType.File;
+
     const fallbackMime = type === 'photo'
       ? 'image/jpeg'
       : type === 'video'
@@ -1613,73 +1639,164 @@ export class KakaoForgeClient extends EventEmitter {
           ? 'audio/mpeg'
           : 'application/octet-stream';
     const mime = opts.mime || guessMime(filePath, fallbackMime);
-    const uploadUrl = this._resolveUploadUrl(type, opts.uploadUrl);
-    const headers = this._buildUploadHeaders(opts);
 
-    const res = await uploadMultipartFile({
-      url: uploadUrl,
-      filePath,
-      fieldName: opts.fieldName,
-      filename: opts.filename,
-      mime,
-      headers,
-      fields: opts.fields,
-      timeoutMs: opts.timeoutMs,
-      onProgress: opts.onProgress,
-    });
-
-    const json = res?.json;
-    const accessKey = json?.access_key
-      || json?.accessKey
-      || json?.key
-      || json?.result?.access_key
-      || json?.result?.accessKey
-      || json?.data?.access_key
-      || json?.data?.accessKey;
-
-    if (!accessKey) {
-      const preview = res?.body ? String(res.body).slice(0, 400) : '';
-      throw new Error(`upload response missing access_key: ${preview}`);
+    let width = opts.width;
+    let height = opts.height;
+    if (type === 'photo' && (!width || !height)) {
+      const size = readImageSize(filePath);
+      if (size) {
+        width = width || size.width;
+        height = height || size.height;
+      }
     }
 
-    const tokenKey = type === 'video' ? 'tk' : 'k';
-    const attachment: Record<string, any> = {
-      [tokenKey]: accessKey,
-    };
+    const checksum = (await sha1FileHex(filePath)).toUpperCase();
+    const extRaw = path.extname(filePath);
+    const ext = extRaw ? extRaw.replace('.', '').toLowerCase() : '';
 
+    const shipBody: any = {
+      c: toLong(uploadChatId),
+      s: toLong(stat.size),
+      t: logType,
+      cs: checksum,
+    };
+    if (ext) shipBody.e = ext;
+    if (opts.extra) shipBody.ex = opts.extra;
+
+    const shipRes = await this._carriage.request('SHIP', shipBody, opts.timeoutMs || 10000);
+    if (typeof shipRes.status === 'number' && shipRes.status !== 0) {
+      throw new Error(`SHIP failed: status=${shipRes.status}`);
+    }
+    const shipBodyRes = shipRes?.body || {};
+    const token = shipBodyRes.k || shipBodyRes.key || shipBodyRes.token;
+    if (!token) {
+      const preview = shipBodyRes ? JSON.stringify(shipBodyRes).slice(0, 400) : '(empty)';
+      throw new Error(`SHIP response missing token: ${preview}`);
+    }
+
+    let host = shipBodyRes.vh || shipBodyRes.host || '';
+    let port = Number(shipBodyRes.p || shipBodyRes.port || 0);
+    if (!host || !port) {
+      const trailerRes = await this._carriage.request('GETTRAILER', { k: token, t: logType }, opts.timeoutMs || 10000);
+      if (typeof trailerRes.status === 'number' && trailerRes.status !== 0) {
+        throw new Error(`GETTRAILER failed: status=${trailerRes.status}`);
+      }
+      const trailerBody = trailerRes?.body || {};
+      host = host || trailerBody.vh || trailerBody.host || '';
+      port = port || Number(trailerBody.p || trailerBody.port || 0);
+    }
+
+    if (!host || !port) {
+      throw new Error('UPLOAD failed: no trailer host/port');
+    }
+
+    const uploadClient = new CarriageClient();
+    uploadClient.on('error', (err) => {
+      if (this.debug) {
+        console.error('[DBG] Upload error:', err.message);
+      }
+    });
+    let postRes: any = null;
+    try {
+      await uploadClient.connect(host, port, opts.timeoutMs || 10000, this.socketKeepAliveMs || 30000);
+      const extraValue = typeof opts.extra === 'string' ? opts.extra : '';
+      const supplementValue = typeof opts.supplement === 'string' ? opts.supplement : '';
+      const deviceType = Number.isFinite(parseInt(String(this.dtype), 10))
+        ? parseInt(String(this.dtype), 10)
+        : 2;
+      const widthValue = width ? Math.floor(width) : 0;
+      const heightValue = height ? Math.floor(height) : 0;
+      const postBody: any = {
+        u: toLong(this.userId),
+        k: token,
+        t: logType,
+        s: toLong(stat.size),
+        c: toLong(uploadChatId),
+        mid: toLong(msgId),
+        w: widthValue,
+        h: heightValue,
+        mm: this.mccmnc,
+        nt: this.ntype,
+        os: this.os,
+        av: this.appVer,
+        ex: extraValue,
+        f: opts.filename || opts.name || path.basename(filePath),
+        sp: supplementValue,
+        ns: !!opts.noSeen,
+        dt: deviceType,
+        scp: typeof opts.scope === 'number' ? opts.scope : 1,
+        silence: !!((opts as any).silence || (opts as any).isSilence),
+      };
+      if ((opts as any).threadId !== undefined && (opts as any).threadId !== null) {
+        postBody.tid = toLong((opts as any).threadId);
+      }
+      if ((opts as any).featureStat) {
+        postBody.featureStat = (opts as any).featureStat;
+      }
+
+      postRes = await uploadClient.request('POST', postBody, opts.timeoutMs || 10000);
+      if (typeof postRes.status === 'number' && postRes.status !== 0) {
+        throw new Error(`UPLOAD POST failed: status=${postRes.status}`);
+      }
+      const offset = safeNumber(postRes?.body?.o, 0);
+      if (offset < stat.size) {
+        await streamEncryptedFile(uploadClient, filePath, offset, stat.size, opts.onProgress);
+      }
+      await uploadClient.end();
+    } finally {
+      uploadClient.disconnect();
+    }
+
+    const postBodyRes = postRes?.body && typeof postRes.body === 'object' ? postRes.body : {};
+    const attachment: Record<string, any> = {};
+    if (type === 'video') {
+      const tk = postBodyRes.tk || postBodyRes.token;
+      const k = postBodyRes.k || postBodyRes.key;
+      if (!tk && !k) {
+        const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
+        throw new Error(`UPLOAD POST missing video token: ${preview}`);
+      }
+      if (tk) attachment.tk = tk;
+      if (k) attachment.k = k;
+      if (postBodyRes.tkh) attachment.tkh = postBodyRes.tkh;
+      if (postBodyRes.urlh) attachment.urlh = postBodyRes.urlh;
+    } else {
+      const k = postBodyRes.k || postBodyRes.key;
+      if (!k) {
+        const preview = postBodyRes ? JSON.stringify(postBodyRes).slice(0, 400) : '(empty)';
+        throw new Error(`UPLOAD POST missing key: ${preview}`);
+      }
+      attachment.k = k;
+    }
+
+    attachment.cs = postBodyRes.cs || checksum;
     if (type === 'file') {
-      attachment.s = stat.size;
-      attachment.name = opts.name || opts.filename || path.basename(filePath);
-      attachment.size = stat.size;
-      if (mime) {
-        attachment.mime = mime;
+      attachment.s = postBodyRes.s ?? stat.size;
+      attachment.name = postBodyRes.name || opts.name || opts.filename || path.basename(filePath);
+      attachment.size = postBodyRes.size ?? stat.size;
+      const mimeValue = postBodyRes.mt || postBodyRes.mime || mime;
+      if (mimeValue) {
+        attachment.mime = mimeValue;
       }
     } else {
-      attachment.s = stat.size;
-      if (mime) {
-        attachment.mt = mime;
+      attachment.s = postBodyRes.s ?? stat.size;
+      const mimeValue = postBodyRes.mt || mime;
+      if (mimeValue) {
+        attachment.mt = mimeValue;
       }
-
-      let width = opts.width;
-      let height = opts.height;
-      if (type === 'photo' && (!width || !height)) {
-        const size = readImageSize(filePath);
-        if (size) {
-          width = width || size.width;
-          height = height || size.height;
-        }
-      }
-      if (width) attachment.w = width;
-      if (height) attachment.h = height;
-      if (opts.duration) attachment.d = opts.duration;
+      const widthValue = postBodyRes.w ?? width;
+      const heightValue = postBodyRes.h ?? height;
+      if (widthValue) attachment.w = widthValue;
+      if (heightValue) attachment.h = heightValue;
+      if (postBodyRes.d ?? opts.duration) attachment.d = postBodyRes.d ?? opts.duration;
     }
 
-    const info = json?.info || json?.data?.info || json?.result?.info;
     return {
-      accessKey: String(accessKey),
+      accessKey: String(token),
       attachment,
-      info,
-      raw: res,
+      msgId,
+      info: postRes?.body || shipBodyRes,
+      raw: { ship: shipRes, post: postRes },
     };
   }
 
@@ -1715,7 +1832,12 @@ export class KakaoForgeClient extends EventEmitter {
     return this.sendMessage(chatId, text || '', { ...sendOpts, type, extra });
   }
 
-  async _prepareMediaAttachment(type: UploadMediaType, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
+  async _prepareMediaAttachment(
+    type: UploadMediaType,
+    attachment: AttachmentInput,
+    opts: AttachmentSendOptions = {},
+    chatId?: number | string
+  ) {
     if (typeof attachment === 'string') {
       let stat: fs.Stats;
       try {
@@ -1726,7 +1848,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (!stat.isFile()) {
         throw new Error(`not a file: ${attachment}`);
       }
-      return await this._uploadMedia(type, attachment, opts);
+      return await this._uploadMedia(type, attachment, opts, chatId);
     }
     return attachment;
   }
@@ -1736,27 +1858,55 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   async sendPhoto(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const prepared = await this._prepareMediaAttachment('photo', attachment, opts);
+    const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
+      ? (attachment as any).msgId
+      : undefined;
+    const msgId = opts.msgId !== undefined && opts.msgId !== null
+      ? opts.msgId
+      : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
+    const sendOpts = { ...opts, msgId };
+    const prepared = await this._prepareMediaAttachment('photo', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
-    return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, opts, 'photo');
+    return this._sendWithAttachment(chatId, MessageType.Photo, opts.text || '', normalized, sendOpts, 'photo');
   }
 
   async sendVideo(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const prepared = await this._prepareMediaAttachment('video', attachment, opts);
+    const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
+      ? (attachment as any).msgId
+      : undefined;
+    const msgId = opts.msgId !== undefined && opts.msgId !== null
+      ? opts.msgId
+      : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
+    const sendOpts = { ...opts, msgId };
+    const prepared = await this._prepareMediaAttachment('video', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
-    return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, opts, 'video');
+    return this._sendWithAttachment(chatId, MessageType.Video, opts.text || '', normalized, sendOpts, 'video');
   }
 
   async sendAudio(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const prepared = await this._prepareMediaAttachment('audio', attachment, opts);
+    const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
+      ? (attachment as any).msgId
+      : undefined;
+    const msgId = opts.msgId !== undefined && opts.msgId !== null
+      ? opts.msgId
+      : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
+    const sendOpts = { ...opts, msgId };
+    const prepared = await this._prepareMediaAttachment('audio', attachment, sendOpts, chatId);
     const normalized = normalizeMediaAttachment(unwrapAttachment(prepared));
-    return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, opts, 'audio');
+    return this._sendWithAttachment(chatId, MessageType.Audio, opts.text || '', normalized, sendOpts, 'audio');
   }
 
   async sendFile(chatId: number | string, attachment: AttachmentInput, opts: AttachmentSendOptions = {}) {
-    const prepared = await this._prepareMediaAttachment('file', attachment, opts);
+    const attachmentMsgId = typeof attachment === 'object' && attachment && 'msgId' in attachment
+      ? (attachment as any).msgId
+      : undefined;
+    const msgId = opts.msgId !== undefined && opts.msgId !== null
+      ? opts.msgId
+      : (attachmentMsgId !== undefined ? attachmentMsgId : this._nextClientMsgId());
+    const sendOpts = { ...opts, msgId };
+    const prepared = await this._prepareMediaAttachment('file', attachment, sendOpts, chatId);
     const normalized = normalizeFileAttachment(unwrapAttachment(prepared));
-    return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, opts, 'file');
+    return this._sendWithAttachment(chatId, MessageType.File, opts.text || '', normalized, sendOpts, 'file');
   }
 
   async sendContact(chatId: number | string, contact: ContactPayload | AttachmentInput, opts: AttachmentSendOptions = {}) {
