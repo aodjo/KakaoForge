@@ -25,6 +25,7 @@ import {
 } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
+import { Reactions, type ReactionTypeValue } from './types/reaction';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
 
@@ -270,7 +271,7 @@ export type ChatModule = {
   sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
   sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
-  sendReaction: (chatId: number | string, target: any, reactionType: number, opts?: ReactionOptions) => Promise<any>;
+  sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -3656,7 +3657,7 @@ export class KakaoForgeClient extends EventEmitter {
     return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Link, extra });
   }
 
-  async sendReaction(chatId: number | string, target: any, reactionType: number, opts: ReactionOptions = {}) {
+  async sendReaction(chatId: number | string, target: any, reactionType: ReactionTypeValue, opts: ReactionOptions = {}) {
     const resolvedChatId = this._resolveChatId(chatId);
     const targetInfo = normalizeReactionTarget(target);
     const logIdValue = normalizeIdValue(targetInfo?.logId ?? 0);
@@ -3858,6 +3859,8 @@ export function createClient(config: KakaoForgeConfig = {}) {
 export const KakaoBot = KakaoForgeClient;
 
 export { MessageType } from './types/message';
+export { Reactions } from './types/reaction';
 
 export type { MessageTypeValue } from './types/message';
+export type { ReactionTypeValue } from './types/reaction';
 export type KakaoBot = KakaoForgeClient;
