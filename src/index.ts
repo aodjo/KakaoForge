@@ -61,6 +61,17 @@ export type MessageEvent = {
   logId: number | string;
 };
 
+export type MemberAction = 'join' | 'leave' | 'invite' | 'kick';
+
+export type MemberEvent = {
+  type: MemberAction;
+  room: MessageEvent['room'];
+  actor?: MessageEvent['sender'];
+  members?: MessageEvent['sender'][];
+  message?: MessageEvent;
+  raw: any;
+};
+
 export { MemberType } from './types/member-type';
 export type { MemberTypeValue } from './types/member-type';
 export type MemberType = MemberTypeValue;
@@ -273,6 +284,7 @@ export type KakaoForgeConfig = {
   transcodeVideos?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
+  feedTypeMap?: Record<number, MemberAction>;
 };
 
 type AuthFile = {
@@ -356,6 +368,7 @@ type ChatListCursor = {
 };
 
 type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
+type MemberEventHandler = ((chat: ChatModule, evt: MemberEvent) => void) | ((evt: MemberEvent) => void);
 
 type MemberNameCache = Map<string, Map<string, string>>;
 
@@ -1185,6 +1198,111 @@ function normalizeIdValue(value: any): number | string {
   return Number(value) || 0;
 }
 
+function extractFeedPayload(chatLog: any, attachmentsRaw: any[]): any | null {
+  if (chatLog && typeof chatLog === 'object') {
+    if (chatLog.feed && typeof chatLog.feed === 'object') return chatLog.feed;
+    if (chatLog.extra !== undefined && chatLog.extra !== null) {
+      const extra = parseAttachmentJson(chatLog.extra) ?? chatLog.extra;
+      if (extra && typeof extra === 'object') {
+        if ('feedType' in extra || 'ft' in extra || 'feed' in extra) {
+          return (extra as any).feed || extra;
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(attachmentsRaw)) {
+    for (const entry of attachmentsRaw) {
+      if (!entry || typeof entry !== 'object') continue;
+      if ('feedType' in entry || 'ft' in entry || 'feed' in entry) {
+        return (entry as any).feed || entry;
+      }
+    }
+  }
+  return null;
+}
+
+function extractMemberIdsFromPayload(payload: any) {
+  const out: Array<number | string> = [];
+  const seen = new Set<string>();
+  const add = (value: any) => {
+    const id = normalizeIdValue(value);
+    if (!id) return;
+    const key = String(id);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(id);
+  };
+
+  if (Array.isArray(payload?.memberIds)) {
+    payload.memberIds.forEach(add);
+  }
+  if (Array.isArray(payload?.mids)) {
+    payload.mids.forEach(add);
+  }
+  if (Array.isArray(payload?.members)) {
+    for (const mem of payload.members) {
+      add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid);
+    }
+  }
+  add(payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid ?? payload?.targetId);
+  return out;
+}
+
+function buildMemberNameMap(payload: any) {
+  const map = new Map<string, string>();
+  const add = (idValue: any, nameValue: any) => {
+    const id = normalizeIdValue(idValue);
+    if (!id) return;
+    const name = nameValue ? String(nameValue) : '';
+    map.set(String(id), name);
+  };
+  if (Array.isArray(payload?.members)) {
+    for (const mem of payload.members) {
+      add(mem?.userId ?? mem?.id ?? mem?.memberId ?? mem?.mid ?? mem?.uid, mem?.nickName ?? mem?.nickname ?? mem?.name);
+    }
+  }
+  add(payload?.memberId ?? payload?.mid ?? payload?.userId ?? payload?.uid, payload?.memberName ?? payload?.nickName);
+  return map;
+}
+
+function extractActorIdFromPayload(payload: any) {
+  return normalizeIdValue(
+    payload?.actorId ??
+      payload?.aid ??
+      payload?.inviterId ??
+      payload?.fromUserId ??
+      payload?.ownerId ??
+      0
+  );
+}
+
+const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
+  NEWMEM: 'join',
+  JOIN: 'join',
+  INVMEM: 'invite',
+  INVITEMEM: 'invite',
+  DELMEM: 'leave',
+  LEAVEMEM: 'leave',
+  LEAVE: 'leave',
+  KICKMEM: 'kick',
+  KICK: 'kick',
+};
+
+function resolveMemberActionFromPush(method: string): MemberAction | null {
+  return PUSH_MEMBER_ACTIONS[method] || null;
+}
+
+function normalizeMemberAction(value: any): MemberAction | null {
+  if (!value) return null;
+  const text = String(value).toLowerCase();
+  if (text.includes('join') || text.includes('enter')) return 'join';
+  if (text.includes('leave') || text.includes('exit')) return 'leave';
+  if (text.includes('invite')) return 'invite';
+  if (text.includes('kick') || text.includes('ban')) return 'kick';
+  return null;
+}
+
 function truncateReplyMessage(text: string, maxLen = 100) {
   if (!text) return '';
   if (text.length <= maxLen) return text;
@@ -1547,6 +1665,10 @@ async function streamEncryptedFile(
  *
  * Events emitted:
  *   - 'message'     : Chat message received (chat, msg)
+ *   - 'join'        : Member joined (chat, evt)
+ *   - 'leave'       : Member left (chat, evt)
+ *   - 'invite'      : Member invited (chat, evt)
+ *   - 'kick'        : Member kicked (chat, evt)
  *   - 'ready'       : LOCO login + push ready (chat)
  *   - 'connected'   : LOCO socket connected
  *   - 'disconnected': Bot disconnected
@@ -1579,6 +1701,7 @@ export class KakaoForgeClient extends EventEmitter {
   memberLookupTimeoutMs: number;
   pingIntervalMs: number;
   socketKeepAliveMs: number;
+  feedTypeMap: Record<number, MemberAction>;
   videoQuality: VideoQuality;
   transcodeVideos: boolean;
   ffmpegPath: string;
@@ -1590,6 +1713,10 @@ export class KakaoForgeClient extends EventEmitter {
   _calendar: CalendarClient | null;
   _bubble: BubbleClient | null;
   _messageHandler: MessageHandler | null;
+  _joinHandler: MemberEventHandler | null;
+  _leaveHandler: MemberEventHandler | null;
+  _inviteHandler: MemberEventHandler | null;
+  _kickHandler: MemberEventHandler | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
@@ -1670,6 +1797,7 @@ export class KakaoForgeClient extends EventEmitter {
     this.socketKeepAliveMs = typeof config.socketKeepAliveMs === 'number'
       ? config.socketKeepAliveMs
       : 30000;
+    this.feedTypeMap = config.feedTypeMap ? { ...config.feedTypeMap } : {};
 
     this.videoQuality = config.videoQuality || 'high';
     this.transcodeVideos = config.transcodeVideos !== false;
@@ -1685,6 +1813,10 @@ export class KakaoForgeClient extends EventEmitter {
     this._bubble = null;
 
     this._messageHandler = null;
+    this._joinHandler = null;
+    this._leaveHandler = null;
+    this._inviteHandler = null;
+    this._kickHandler = null;
     this._pushHandlers = new Map();
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
@@ -2282,6 +2414,13 @@ export class KakaoForgeClient extends EventEmitter {
       handler(packet);
     }
 
+    const memberAction = resolveMemberActionFromPush(packet.method);
+    if (memberAction) {
+      if (this._emitMemberEventFromPush(memberAction, packet)) {
+        return;
+      }
+    }
+
     if (packet.method === 'MSG') {
       const { chatId, chatLog } = packet.body || {};
       if (chatLog) {
@@ -2307,6 +2446,22 @@ export class KakaoForgeClient extends EventEmitter {
 
   onMessage(handler: MessageHandler) {
     this._messageHandler = handler;
+  }
+
+  onJoin(handler: MemberEventHandler) {
+    this._joinHandler = handler;
+  }
+
+  onLeave(handler: MemberEventHandler) {
+    this._leaveHandler = handler;
+  }
+
+  onInvite(handler: MemberEventHandler) {
+    this._inviteHandler = handler;
+  }
+
+  onKick(handler: MemberEventHandler) {
+    this._kickHandler = handler;
   }
 
   onReady(handler: (chat: ChatModule) => void) {
@@ -2359,6 +2514,158 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
     this.emit('message', this.chat, msg);
+
+    this._emitMemberEventsFromMessage(msg, data);
+  }
+
+  _emitMemberEvent(action: MemberAction, event: MemberEvent) {
+    const handler =
+      action === 'join'
+        ? this._joinHandler
+        : action === 'leave'
+          ? this._leaveHandler
+          : action === 'invite'
+            ? this._inviteHandler
+            : this._kickHandler;
+
+    if (handler) {
+      if (handler.length <= 1) {
+        (handler as (evt: MemberEvent) => void)(event);
+      } else {
+        (handler as (chat: ChatModule, evt: MemberEvent) => void)(this.chat, event);
+      }
+    }
+    this.emit(action, this.chat, event);
+  }
+
+  _emitMemberEventsFromMessage(msg: MessageEvent, raw: any) {
+    const chatLog = extractChatLogPayload(raw);
+    const feed = extractFeedPayload(chatLog, msg.attachmentsRaw);
+    if (!feed) return;
+
+    const action = this._resolveFeedAction(feed);
+    if (!action) return;
+
+    const memberIds = extractMemberIdsFromPayload(feed);
+    const nameMap = buildMemberNameMap(feed);
+
+    const feedActorId = extractActorIdFromPayload(feed);
+    const actorId = feedActorId || msg.sender.id;
+    const actorName = feedActorId ? nameMap.get(String(actorId)) : msg.sender.name;
+
+    const event = this._buildMemberEvent(action, msg.room.id, {
+      actorId,
+      actorName,
+      memberIds,
+      memberNameMap: nameMap,
+      message: msg,
+      raw: { feed, raw },
+    });
+    this._emitMemberEvent(action, event);
+  }
+
+  _emitMemberEventFromPush(action: MemberAction, packet: any) {
+    const body = packet?.body || {};
+    const roomId = normalizeIdValue(body.chatId || body.c || body.roomId || 0);
+    if (!roomId) return false;
+
+    const memberIds = extractMemberIdsFromPayload(body);
+    const nameMap = buildMemberNameMap(body);
+    const actorId = extractActorIdFromPayload(body);
+    const actorName = actorId ? nameMap.get(String(actorId)) : '';
+
+    const event = this._buildMemberEvent(action, roomId, {
+      actorId,
+      actorName,
+      memberIds,
+      memberNameMap: nameMap,
+      raw: body,
+    });
+    this._emitMemberEvent(action, event);
+    return true;
+  }
+
+  _buildMemberEvent(
+    action: MemberAction,
+    chatId: number | string,
+    opts: {
+      actorId?: number | string;
+      actorName?: string;
+      memberIds?: Array<number | string>;
+      memberNameMap?: Map<string, string>;
+      message?: MessageEvent;
+      raw?: any;
+    }
+  ): MemberEvent {
+    const room = this._buildRoomPayload(chatId);
+    const event: MemberEvent = {
+      type: action,
+      room,
+      raw: opts.raw,
+    };
+    if (opts.message) event.message = opts.message;
+
+    if (opts.actorId) {
+      event.actor = this._buildMemberRef(chatId, opts.actorId, opts.actorName);
+    }
+
+    if (opts.memberIds && opts.memberIds.length > 0) {
+      const members: MessageEvent['sender'][] = [];
+      for (const memberId of opts.memberIds) {
+        const name = opts.memberNameMap?.get(String(memberId));
+        members.push(this._buildMemberRef(chatId, memberId, name));
+      }
+      event.members = members;
+    }
+
+    return event;
+  }
+
+  _buildMemberRef(chatId: number | string, userId: number | string, fallbackName?: string) {
+    const name = fallbackName || this._getCachedMemberName(chatId, userId) || '';
+    const type = this._resolveMemberType(chatId, userId);
+    return { id: userId, name, type };
+  }
+
+  _buildRoomPayload(chatId: number | string): MessageEvent['room'] {
+    const resolvedChatId = this._resolveChatId(chatId);
+    const roomInfo = this._chatRooms.get(String(resolvedChatId)) || {};
+    const flags = resolveRoomFlags(roomInfo);
+    let roomName = flags.isOpenChat
+      ? (roomInfo.title || '')
+      : (roomInfo.roomName || roomInfo.title || '');
+    if (!roomName) {
+      roomName = roomInfo.roomName || roomInfo.title || '';
+    }
+    return {
+      id: resolvedChatId,
+      name: roomName,
+      isGroupChat: flags.isGroupChat,
+      isOpenChat: flags.isOpenChat,
+      openLinkId: roomInfo.openLinkId || roomInfo.openChatId || roomInfo.li,
+    };
+  }
+
+  _resolveFeedAction(feed: any): MemberAction | null {
+    const rawAction =
+      feed?.action ??
+      feed?.event ??
+      feed?.typeName ??
+      feed?.feedTypeName ??
+      feed?.feedAction;
+    const fromString = normalizeMemberAction(rawAction);
+    if (fromString) return fromString;
+
+    const rawType = feed?.feedType ?? feed?.ft ?? feed?.type ?? feed?.t;
+    const numeric = safeNumber(rawType, NaN);
+    if (!Number.isNaN(numeric)) {
+      const mapped = this.feedTypeMap[numeric];
+      if (mapped) return mapped;
+      if (this.debug) {
+        console.log(`[DBG] feedType ${numeric} has no mapping`);
+      }
+    }
+    return null;
   }
 
   async _buildMessageEvent(data: any): Promise<MessageEvent | null> {
