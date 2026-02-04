@@ -1892,7 +1892,7 @@ export class KakaoForgeClient extends EventEmitter {
       if (!roomName) {
         roomName = refreshed.roomName || refreshed.title || roomName;
       }
-      if (!roomName) {
+      if (!roomName && !flags.isOpenChat) {
         const derived = this._buildRoomNameFromMembers(String(roomIdValue));
         if (derived) {
           roomName = derived;
@@ -2039,11 +2039,12 @@ export class KakaoForgeClient extends EventEmitter {
       const key = String(chatIdValue);
       this._recordChatAlias(chatIdValue);
       const prev = this._chatRooms.get(key) || {};
+      const flags = resolveRoomFlags(chat);
       const displayMembers = this._extractDisplayMembers(chat);
       const title = this._extractTitle(chat);
       const roomName =
         title ||
-        (displayMembers.length > 0 ? displayMembers.join(', ') : '') ||
+        (!flags.isOpenChat && displayMembers.length > 0 ? displayMembers.join(', ') : '') ||
         prev.roomName ||
         '';
 
@@ -2054,7 +2055,6 @@ export class KakaoForgeClient extends EventEmitter {
 
       const lastSeenLogId = safeNumber(chat.lastSeenLogId, prev.lastSeenLogId || 0);
 
-      const flags = resolveRoomFlags(chat);
       const next: ChatRoomInfo = {
         ...prev,
         chatId: chatIdValue,
