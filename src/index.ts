@@ -29,6 +29,7 @@ import { Reactions, type ReactionTypeValue } from './types/reaction';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
 import { KakaoDb } from './db/kakao-db';
+import { KakaoSecondaryDb } from './db/kakao-secondary-db';
 
 export type TransportMode = 'loco' | null;
 
@@ -1598,7 +1599,7 @@ export class KakaoForgeClient extends EventEmitter {
   debugGetConf: boolean;
   _conf: any;
   _db: KakaoDb | null;
-  _dbSecondary: KakaoDb | null;
+  _dbSecondary: KakaoSecondaryDb | null;
 
   _booking: BookingClient | null;
   _carriage: CarriageClient | null;
@@ -1718,8 +1719,8 @@ export class KakaoForgeClient extends EventEmitter {
         secondary: `${base}2${ext}`,
       };
     };
-    const initDb = (target: string, label: string) => {
-      const tryInit = () => new KakaoDb(target);
+    const initDb = (target: string, label: string, kind: 'primary' | 'secondary') => {
+      const tryInit = () => (kind === 'secondary' ? new KakaoSecondaryDb(target) : new KakaoDb(target));
       try {
         return tryInit();
       } catch (err) {
@@ -1746,8 +1747,8 @@ export class KakaoForgeClient extends EventEmitter {
     };
     if (dbPath) {
       const paths = resolveDbPaths(String(dbPath));
-      this._db = initDb(paths.primary, 'DB');
-      this._dbSecondary = initDb(paths.secondary, 'DB2');
+      this._db = initDb(paths.primary, 'DB', 'primary') as KakaoDb | null;
+      this._dbSecondary = initDb(paths.secondary, 'DB2', 'secondary') as KakaoSecondaryDb | null;
     }
 
     // LOCO clients
@@ -2438,7 +2439,7 @@ export class KakaoForgeClient extends EventEmitter {
     chatLog: any,
     opts: { lastMessage?: string; openLinkId?: number | string; updateRoom?: boolean; updateThread?: boolean } = {}
   ) {
-    if ((!this._db && !this._dbSecondary) || !chatLog) return;
+    if (!this._db || !chatLog) return;
 
     const roomIdValue = normalizeIdValue(chatId || chatLog.chatId || chatLog.chatRoomId || chatLog.roomId || chatLog.c || 0);
     const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
@@ -2456,9 +2457,8 @@ export class KakaoForgeClient extends EventEmitter {
         0
     );
 
-    const store = (db: KakaoDb | null) => {
-      if (!db) return;
-      db.storeChatLog(
+    const store = () => {
+      this._db!.storeChatLog(
         {
           logId: logIdValue,
           chatId: roomIdValue,
@@ -2486,8 +2486,7 @@ export class KakaoForgeClient extends EventEmitter {
     };
 
     try {
-      store(this._db);
-      store(this._dbSecondary);
+      store();
     } catch (err) {
       if (this.debug) {
         console.error('[DBG] DB store failed:', err instanceof Error ? err.message : String(err));
