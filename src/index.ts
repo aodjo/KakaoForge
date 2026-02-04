@@ -1005,6 +1005,19 @@ function stringifyLossless(obj: unknown) {
   });
 }
 
+function previewLossless(obj: unknown, maxLen = 800) {
+  let text = '';
+  try {
+    text = stringifyLossless(obj);
+  } catch {
+    text = String(obj);
+  }
+  if (text.length > maxLen) {
+    return `${text.slice(0, maxLen)}...`;
+  }
+  return text;
+}
+
 function buildExtra(attachment?: AttachmentInput, extra?: string) {
   if (typeof extra === 'string' && extra.length > 0) return extra;
   if (attachment === undefined || attachment === null) return undefined;
@@ -1824,6 +1837,12 @@ export class KakaoForgeClient extends EventEmitter {
         this._chatRooms.set(key, next);
         const members = body.m || body.members || body.memberList || [];
         if (Array.isArray(members) && members.length > 0) {
+          if (this.debug) {
+            const sample = members[0] || {};
+            const keys = Object.keys(sample || {});
+            console.log('[DBG] chatOnRoom members keys:', keys.join(','));
+            console.log('[DBG] chatOnRoom member sample:', previewLossless(sample));
+          }
           this._cacheMembers(resolvedChatId, members);
         }
 
@@ -2857,6 +2876,16 @@ export class KakaoForgeClient extends EventEmitter {
     const task = (async () => {
       const res = await this._carriage.member(resolvedChatId, [userId]);
       const members = res?.body?.members || res?.body?.memberList || res?.body?.memList || [];
+      if (this.debug && Array.isArray(members) && members.length > 0) {
+        const roomInfo = this._chatRooms.get(String(resolvedChatId)) || {};
+        const flags = resolveRoomFlags(roomInfo);
+        if (flags.isOpenChat) {
+          const sample = members[0] || {};
+          const keys = Object.keys(sample || {});
+          console.log('[DBG] member(openchat) keys:', keys.join(','));
+          console.log('[DBG] member(openchat) sample:', previewLossless(sample));
+        }
+      }
       this._cacheMembers(resolvedChatId, members);
     })()
       .catch((err) => {
