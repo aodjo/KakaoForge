@@ -285,6 +285,9 @@ type ChatRoomInfo = {
   displayMembers?: any[];
   isGroupChat?: boolean;
   isOpenChat?: boolean;
+  openLinkId?: number | string;
+  openToken?: number;
+  directChat?: boolean;
   lastChatLogId?: number;
   lastSeenLogId?: number;
   lastLogId?: number;
@@ -545,8 +548,10 @@ function parseAttachments(raw: any): any[] {
 }
 
 function resolveRoomFlags(source: any) {
-  const typeRaw = source?.type ?? '';
+  const typeRaw = source?.type ?? source?.t ?? source?.chatType ?? '';
   const typeName = String(typeRaw).toLowerCase();
+  const openLinkId = source?.openLinkId ?? source?.openChatId ?? source?.li ?? source?.openLink ?? source?.openChat;
+  const openToken = source?.openToken ?? source?.otk;
 
   let isOpenChat = false;
   if (typeof source?.isOpenChat === 'boolean') {
@@ -555,16 +560,11 @@ function resolveRoomFlags(source: any) {
     isOpenChat = source.openChat;
   } else if (typeof source?.isOpen === 'boolean') {
     isOpenChat = source.isOpen;
+  } else if (typeName === 'om' || typeName === 'od') {
+    isOpenChat = true;
   } else if (typeName.includes('open')) {
     isOpenChat = true;
-  } else if (
-    source?.openChatId ||
-    source?.openLinkId ||
-    source?.openLink ||
-    source?.openLinkType ||
-    source?.openLinkName ||
-    source?.openLinkUrl
-  ) {
+  } else if (openLinkId || openToken) {
     isOpenChat = true;
   } else if (source?.meta) {
     try {
@@ -599,8 +599,14 @@ function resolveRoomFlags(source: any) {
     isGroupChat = source.multiChat;
   } else if (typeof source?.isGroup === 'boolean') {
     isGroupChat = source.isGroup;
+  } else if (typeof source?.directChat === 'boolean') {
+    isGroupChat = !source.directChat;
   } else if (isOpenChat) {
-    isGroupChat = true;
+    if (typeName === 'od') {
+      isGroupChat = false;
+    } else {
+      isGroupChat = true;
+    }
   } else if (typeName.includes('multi') || typeName.includes('group') || typeName.includes('moim')) {
     isGroupChat = true;
   } else if (typeName.includes('direct') || typeName.includes('memo') || typeName.includes('self')) {
@@ -1843,7 +1849,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (!Array.isArray(chats)) return;
 
     for (const chat of chats) {
-      const chatId = safeNumber(chat?.chatId || chat?.id || chat?.roomId || chat?.chatRoomId, 0);
+      const chatId = safeNumber(chat?.chatId || chat?.id || chat?.roomId || chat?.chatRoomId || chat?.c, 0);
       if (!chatId) continue;
 
       const key = String(chatId);
@@ -1867,12 +1873,15 @@ export class KakaoForgeClient extends EventEmitter {
       const next: ChatRoomInfo = {
         ...prev,
         chatId,
-        type: chat.type || prev.type,
+        type: chat.type || chat.t || prev.type,
         title: title || prev.title || '',
         roomName,
         displayMembers: displayMembers.length > 0 ? displayMembers : prev.displayMembers,
         isGroupChat: flags.isGroupChat,
         isOpenChat: flags.isOpenChat,
+        openLinkId: chat.openLinkId || chat.openChatId || chat.li || prev.openLinkId,
+        openToken: chat.openToken || chat.otk || prev.openToken,
+        directChat: typeof chat.directChat === 'boolean' ? chat.directChat : prev.directChat,
         lastChatLogId,
         lastSeenLogId,
       };
