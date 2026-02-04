@@ -991,19 +991,21 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
     const text = chatLog.message || chatLog.msg || chatLog.text || input.message?.text || input.text || '';
     const type = safeNumber(chatLog.type || chatLog.msgType || input.message?.type || input.type || MessageType.Text, MessageType.Text);
     const mentions = extractMentions(chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? input.attachmentsRaw);
-    const linkId = chatLog.linkId || chatLog.src_linkId || input.linkId || input.src_linkId;
+    const linkId = input.raw?.li;
     return { logId, userId, text, type, mentions, linkId };
   }
 
   if (input.message && input.sender) {
     const message = input.message || {};
     const sender = input.sender || {};
+    const linkId = input.raw?.li;
     return {
       logId: normalizeIdValue(message.logId || message.id || input.logId || 0),
       userId: normalizeIdValue(sender.id || input.senderId || 0),
       text: message.text || input.text || '',
       type: safeNumber(message.type || input.type || MessageType.Text, MessageType.Text),
       mentions: extractMentions(input.attachmentsRaw),
+      linkId,
     };
   }
 
@@ -1014,7 +1016,7 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
   const text = input.message || input.text || input.msg || '';
   const type = safeNumber(input.type || input.msgType || MessageType.Text, MessageType.Text);
   const mentions = input.mentions || input.src_mentions || extractMentions(input.attachmentsRaw);
-  const linkId = input.linkId || input.src_linkId;
+  const linkId = input.raw?.li;
 
   return { logId, userId, text, type, mentions, linkId };
 }
