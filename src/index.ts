@@ -299,6 +299,11 @@ export type ChatModule = {
   openChatKick: (chatId: number | string, target: any, opts?: OpenChatKickOptions) => Promise<any>;
   openChatBlind: (chatId: number | string, target: any, opts?: OpenChatBlindOptions) => Promise<any>;
   fetchMessage: (chatId: number | string, logId: number | string) => Promise<MessageEvent>;
+  fetchMessagesByUser: (
+    chatId: number | string,
+    userId: number | string,
+    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number }
+  ) => Promise<MessageEvent[]>;
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
@@ -1689,6 +1694,7 @@ export class KakaoForgeClient extends EventEmitter {
       openChatKick: (chatId, target, opts) => this.openChatKick(chatId, target, opts),
       openChatBlind: (chatId, target, opts) => this.openChatBlind(chatId, target, opts),
       fetchMessage: (chatId, logId) => this.fetchMessage(chatId, logId),
+      fetchMessagesByUser: (chatId, userId, opts) => this.fetchMessagesByUser(chatId, userId, opts),
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
@@ -2954,6 +2960,85 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('message not found');
     }
     return msg;
+  }
+
+  /**
+   * Fetch recent messages by a specific userId via LOCO (SYNCMSG).
+   */
+  async fetchMessagesByUser(
+    chatId: number | string,
+    userId: number | string,
+    opts: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number } = {}
+  ) {
+    const normalizedUserId = normalizeIdValue(userId);
+    if (!normalizedUserId || normalizedUserId === 0 || normalizedUserId === '0') {
+      throw new Error('fetchMessagesByUser requires userId');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    this._recordChatAlias(resolvedChatId);
+
+    const since = opts.since ?? 0;
+    const max = opts.max ?? 0;
+    const count = typeof opts.count === 'number' ? opts.count : 50;
+    const limit = typeof opts.limit === 'number' ? opts.limit : 50;
+    const maxPages = typeof opts.maxPages === 'number' ? opts.maxPages : 5;
+
+    const results: MessageEvent[] = [];
+    let cur = safeNumber(since, 0);
+    let pages = 0;
+
+    while (pages < maxPages && results.length < limit) {
+      const res = await this._carriage.syncMsg({
+        chatId: resolvedChatId,
+        cur,
+        max,
+        cnt: count,
+      });
+
+      const logs = res?.body?.chatLogs || [];
+      if (!Array.isArray(logs) || logs.length === 0) {
+        break;
+      }
+
+      let maxLogId = cur;
+      for (const log of logs) {
+        const logIdValue = safeNumber(log?.logId || log?.msgId || 0, 0);
+        if (logIdValue > maxLogId) {
+          maxLogId = logIdValue;
+        }
+
+        const authorIdValue = normalizeIdValue(log?.authorId || log?.userId || log?.senderId || 0);
+        if (authorIdValue && String(authorIdValue) === String(normalizedUserId)) {
+          const msg = await this._buildMessageEvent({ chatId: resolvedChatId, chatLog: log });
+          if (msg) {
+            results.push(msg);
+            if (results.length >= limit) break;
+          }
+        }
+      }
+
+      if (maxLogId <= cur) break;
+      cur = maxLogId;
+      pages += 1;
+    }
+
+    return results;
   }
 
   /**
