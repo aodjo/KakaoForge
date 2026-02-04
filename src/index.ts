@@ -9,7 +9,18 @@ import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
 import { TicketClient } from './net/ticket-client';
 import { CalendarClient } from './net/calendar-client';
-import { subDeviceLogin, refreshOAuthToken, qrLogin, generateDeviceUuid, buildDeviceId, buildUserAgent } from './auth/login';
+import {
+  subDeviceLogin,
+  refreshOAuthToken,
+  qrLogin,
+  generateDeviceUuid,
+  buildDeviceId,
+  buildUserAgent,
+  buildAuthorizationHeader,
+  buildAHeader,
+  httpsGet,
+  KATALK_HOST,
+} from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
 import { guessMime, readImageSize } from './util/media';
@@ -764,6 +775,93 @@ function normalizeProfileAttachment(input: any) {
     return attachment;
   }
   return input;
+}
+
+function pickFirstValue<T>(...values: T[]): T | undefined {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickFirstObject(...values: any[]) {
+  for (const value of values) {
+    if (value && typeof value === 'object') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function extractProfileFromResponse(body: any, fallbackUserId?: number | string) {
+  const root = body && typeof body === 'object' && 'result' in body ? (body as any).result : body;
+  const data = root && typeof root === 'object' && 'data' in root ? (root as any).data : root;
+  const profile = pickFirstObject(
+    data?.profile,
+    data?.profile3,
+    data?.profileInfo,
+    data?.profileData,
+    data?.userProfile
+  );
+  const user = pickFirstObject(
+    data?.user,
+    data?.friend,
+    data?.member,
+    data?.target,
+    data?.profileUser,
+    data?.profileOwner
+  );
+
+  const accessPermit = pickFirstValue(
+    data?.accessPermit,
+    user?.accessPermit,
+    profile?.accessPermit
+  );
+  const nickName = pickFirstValue(
+    data?.nickName,
+    data?.nickname,
+    user?.nickName,
+    user?.nickname,
+    profile?.nickName,
+    profile?.nickname
+  );
+  const statusMessage = pickFirstValue(
+    data?.statusMessage,
+    user?.statusMessage,
+    profile?.statusMessage
+  );
+  const profileImageUrl = pickFirstValue(
+    data?.profileImageUrl,
+    user?.profileImageUrl,
+    profile?.profileImageUrl
+  );
+  const fullProfileImageUrl = pickFirstValue(
+    data?.fullProfileImageUrl,
+    user?.fullProfileImageUrl,
+    profile?.fullProfileImageUrl,
+    profile?.originalProfileImageUrl
+  );
+
+  const resolvedUserId = pickFirstValue(
+    data?.userId,
+    data?.id,
+    user?.userId,
+    user?.id,
+    user?.talkUserId,
+    user?.targetUserId,
+    fallbackUserId
+  );
+
+  return {
+    userId: resolvedUserId,
+    nickName,
+    fullProfileImageUrl,
+    profileImageUrl,
+    statusMessage,
+    accessPermit,
+  };
 }
 
 function escapeVCardValue(value: string) {
@@ -2111,6 +2209,55 @@ export class KakaoForgeClient extends EventEmitter {
       if (cleanupTemp) cleanupTemp();
     }
   }
+
+  _profileHeaders(extra: Record<string, string> = {}) {
+    return {
+      'Authorization': buildAuthorizationHeader(this.oauthToken, this.deviceId || this.deviceUuid),
+      'A': buildAHeader(this.appVer, this.lang),
+      'User-Agent': buildUserAgent(this.appVer),
+      'talk-agent': `${this.os}/${this.appVer}`,
+      'talk-language': this.lang,
+      ...extra,
+    };
+  }
+
+  async _fetchProfileAttachment(userId: number | string) {
+    if (!this.oauthToken || !this.deviceUuid) {
+      throw new Error('프로필 조회에는 oauthToken/deviceUuid가 필요합니다.');
+    }
+    const idStr = String(userId);
+    const candidates: string[] = [];
+    if (Number(userId) === this.userId) {
+      candidates.push('/android/profile3/me.json');
+    }
+    candidates.push(`/android/profile3/friend_info.json?id=${encodeURIComponent(idStr)}`);
+
+    let lastError: Error | null = null;
+    for (const path of candidates) {
+      try {
+        const res = await httpsGet(KATALK_HOST, path, this._profileHeaders());
+        if (res?.status && res.status >= 400) {
+          lastError = new Error(`프로필 조회 실패: status=${res.status}`);
+          continue;
+        }
+        const body = res?.body;
+        if (body && typeof body === 'object') {
+          const status = (body as any).status;
+          if (typeof status === 'number' && status !== 0) {
+            lastError = new Error(`프로필 조회 실패: ${JSON.stringify(body)}`);
+            continue;
+          }
+        }
+        const extracted = extractProfileFromResponse(body, userId);
+        return extracted;
+      } catch (err) {
+        lastError = err as Error;
+      }
+    }
+    if (lastError) throw lastError;
+    throw new Error('프로필 정보를 가져오지 못했습니다.');
+  }
+
   async _uploadMedia(
     type: UploadMediaType,
     filePath: string,
@@ -2525,21 +2672,31 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('카카오 프로필 전송에는 profile 정보가 필요합니다.');
     }
     const userId = (normalized as any).userId ?? (normalized as any).id;
-    const accessPermit = (normalized as any).accessPermit;
     if (!userId) {
       throw new Error('카카오 프로필 전송에는 userId가 필요합니다.');
     }
-    if (!accessPermit) {
-      throw new Error('카카오 프로필 전송에는 accessPermit이 필요합니다.');
+
+    const hasAccessPermit = !!(normalized as any).accessPermit;
+    const missingProfileFields = !(normalized as any).nickName
+      || !(normalized as any).profileImageUrl
+      || !(normalized as any).fullProfileImageUrl
+      || !(normalized as any).statusMessage;
+    let fetched: any = null;
+    if ((!hasAccessPermit || missingProfileFields) && this.oauthToken && this.deviceUuid) {
+      fetched = await this._fetchProfileAttachment(userId);
     }
+
     const attachment: any = {
       userId: Number(userId),
-      nickName: (normalized as any).nickName || (normalized as any).nickname || '',
-      fullProfileImageUrl: (normalized as any).fullProfileImageUrl || '',
-      profileImageUrl: (normalized as any).profileImageUrl || '',
-      statusMessage: (normalized as any).statusMessage || '',
-      accessPermit: String(accessPermit),
+      nickName: (normalized as any).nickName || (normalized as any).nickname || fetched?.nickName || '',
+      fullProfileImageUrl: (normalized as any).fullProfileImageUrl || fetched?.fullProfileImageUrl || '',
+      profileImageUrl: (normalized as any).profileImageUrl || fetched?.profileImageUrl || '',
+      statusMessage: (normalized as any).statusMessage || fetched?.statusMessage || '',
+      accessPermit: String((normalized as any).accessPermit || fetched?.accessPermit || ''),
     };
+    if (!attachment.accessPermit) {
+      throw new Error('카카오 프로필 전송에는 accessPermit이 필요합니다.');
+    }
     const fallbackText = attachment.nickName || '';
     return this._sendWithAttachment(
       chatId,
