@@ -1623,6 +1623,7 @@ export class KakaoForgeClient extends EventEmitter {
   _memberRefreshTimer: NodeJS.Timeout | null;
   _messageChains: Map<string, Promise<void>>;
   _connectPromise: Promise<any> | null;
+  _syncAllPromise: Promise<SyncAllResult> | null;
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
   _disconnectRequested: boolean;
@@ -1749,6 +1750,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._memberRefreshTimer = null;
     this._messageChains = new Map();
     this._connectPromise = null;
+    this._syncAllPromise = null;
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._disconnectRequested = false;
@@ -3444,70 +3446,80 @@ export class KakaoForgeClient extends EventEmitter {
    * Sync all chats (KakaoTalk-like flow).
    */
   async syncAll(): Promise<SyncAllResult> {
-    const emit = false;
-    const count = 50;
+    if (this._syncAllPromise) return this._syncAllPromise;
 
-    if (!this._carriage && !this._locoAutoConnectAttempted) {
-      this._locoAutoConnectAttempted = true;
-      try {
-        await this.connect();
-      } catch (err) {
-        if (this.debug) {
-          console.error('[DBG] LOCO auto-connect failed:', err.message);
+    this._syncAllPromise = (async () => {
+      const emit = false;
+      const count = 50;
+
+      if (!this._carriage && !this._locoAutoConnectAttempted) {
+        this._locoAutoConnectAttempted = true;
+        try {
+          await this.connect();
+        } catch (err) {
+          if (this.debug) {
+            console.error('[DBG] LOCO auto-connect failed:', err.message);
+          }
         }
       }
-    }
 
-    if (!this._carriage) {
-      throw new Error('LOCO not connected. Call client.connect() first.');
-    }
+      if (!this._carriage) {
+        throw new Error('LOCO not connected. Call client.connect() first.');
+      }
 
-    const list = await this.getChatRooms();
-    const chatIds = new Set<number | string>();
-    if (Array.isArray(list?.chats)) {
-      for (const chat of list.chats) {
-        const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
-        if (id && id !== 0 && id !== '0') {
-          chatIds.add(id);
+      const chatIds = new Set<number | string>();
+      if (this._chatRooms.size > 0) {
+        for (const key of this._chatRooms.keys()) {
+          const id = normalizeIdValue(key);
+          if (id && id !== 0 && id !== '0') {
+            chatIds.add(id);
+          }
+        }
+      } else {
+        const list = await this.getChatRooms();
+        if (Array.isArray(list?.chats)) {
+          for (const chat of list.chats) {
+            const id = normalizeIdValue(chat?.chatId || chat?.id || 0);
+            if (id && id !== 0 && id !== '0') {
+              chatIds.add(id);
+            }
+          }
         }
       }
-    }
-    if (chatIds.size === 0) {
-      for (const key of this._chatRooms.keys()) {
-        const id = normalizeIdValue(key);
-        if (id && id !== 0 && id !== '0') {
-          chatIds.add(id);
-        }
-      }
-    }
 
-    let newMessages = 0;
+      let newMessages = 0;
+      for (const chatId of chatIds) {
+        const resolvedChatId = this._resolveChatId(chatId);
+        let since: number | string = 0;
+        if (this._db) {
+          const latest = this._db.getLatestChatLogId(resolvedChatId);
+          if (latest && latest !== 0 && latest !== '0') {
+            since = latest;
+          }
+        }
+        if (!since || since === 0 || since === '0') {
+          const room = this._chatRooms.get(String(resolvedChatId));
+          if (room?.lastLogId) {
+            since = normalizeIdValue(room.lastLogId);
+          }
+        }
+        const res = await this.syncMessages(resolvedChatId, {
+          since,
+          count,
+          emit,
+        });
+        const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
+        if (Array.isArray(logs)) newMessages += logs.length;
+      }
 
-    for (const chatId of chatIds) {
-      const resolvedChatId = this._resolveChatId(chatId);
-      let since: number | string = 0;
-      if (this._db) {
-        const latest = this._db.getLatestChatLogId(resolvedChatId);
-        if (latest && latest !== 0 && latest !== '0') {
-          since = latest;
-        }
-      }
-      if (!since || since === 0 || since === '0') {
-        const room = this._chatRooms.get(String(resolvedChatId));
-        if (room?.lastLogId) {
-          since = normalizeIdValue(room.lastLogId);
-        }
-      }
-      const res = await this.syncMessages(resolvedChatId, {
-        since,
-        count,
-        emit,
-      });
-      const logs = (res as any)?.chatLogs || (res as any)?.body?.chatLogs || [];
-      if (Array.isArray(logs)) newMessages += logs.length;
+      return { chats: chatIds.size, newMessages };
+    })();
+
+    try {
+      return await this._syncAllPromise;
+    } finally {
+      this._syncAllPromise = null;
     }
-
-    return { chats: chatIds.size, newMessages };
   }
 
   /**
