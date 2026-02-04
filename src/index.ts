@@ -288,6 +288,7 @@ type ChatRoomInfo = {
   openLinkId?: number | string;
   openToken?: number;
   directChat?: boolean;
+  needsTitle?: boolean;
   lastChatLogId?: number;
   lastSeenLogId?: number;
   lastLogId?: number;
@@ -1902,7 +1903,11 @@ export class KakaoForgeClient extends EventEmitter {
       if (!flags.isOpenChat) {
         const titleKey = String(roomIdValue);
         const derived = this._buildRoomNameFromMembers(titleKey);
-        if (!this._chatTitleChecked.has(titleKey) && (!roomName || (derived && roomName === derived))) {
+        const refreshedInfo = this._chatRooms.get(titleKey);
+        const needsTitle = refreshedInfo?.needsTitle;
+        const shouldCheckTitle =
+          (!roomName || (derived && roomName === derived) || needsTitle) && !this._chatTitleChecked.has(titleKey);
+        if (shouldCheckTitle) {
           this._chatTitleChecked.add(titleKey);
           await this._ensureChatInfo(roomIdValue);
           const titled = this._chatRooms.get(titleKey);
@@ -2079,6 +2084,7 @@ export class KakaoForgeClient extends EventEmitter {
 
       const lastSeenLogId = safeNumber(chat.lastSeenLogId, prev.lastSeenLogId || 0);
 
+      const needsTitle = !flags.isOpenChat && !title && displayMembers.length > 0;
       const next: ChatRoomInfo = {
         ...prev,
         chatId: chatIdValue,
@@ -2091,6 +2097,7 @@ export class KakaoForgeClient extends EventEmitter {
         openLinkId: chat.openLinkId || chat.openChatId || chat.li || prev.openLinkId,
         openToken: chat.openToken || chat.otk || prev.openToken,
         directChat: typeof chat.directChat === 'boolean' ? chat.directChat : prev.directChat,
+        needsTitle,
         lastChatLogId,
         lastSeenLogId,
       };
