@@ -1030,7 +1030,7 @@ function normalizeReplyTarget(input: any): ReplyTarget | null {
         rawLog.extra ??
         input.attachmentsRaw
     );
-    const linkId = input.raw?.li;
+    const linkId = input.raw?.li ?? rawLog?.li ?? inner?.li;
     return { logId, userId, text, type, mentions, linkId };
   }
 
