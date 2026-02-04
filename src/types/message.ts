@@ -9,6 +9,7 @@ export const MessageType = {
   Location: 16,
   Profile: 17,
   File: 18,
+  Reply: 26,
 } as const;
 
 export type MessageTypeValue = typeof MessageType[keyof typeof MessageType] | number;

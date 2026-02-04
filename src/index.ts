@@ -2687,7 +2687,7 @@ export class KakaoForgeClient extends EventEmitter {
       throw new Error('reply attachment is required');
     }
     const { extra: _extra, attachOnly: _attachOnly, attachType: _attachType, ...sendOpts } = opts as ReplyOptions;
-    return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Text, extra });
+    return this.sendMessage(chatId, text, { ...sendOpts, type: MessageType.Reply, extra });
   }
 
   async sendThreadReply(
