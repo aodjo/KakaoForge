@@ -161,12 +161,13 @@ export class BookingClient extends EventEmitter {
   /**
    * Send GETCONF to retrieve Ticket hosts and port lists.
    */
-  async getConf({ userId, os = 'android', mccmnc = '45005' }: any) {
+  async getConf({ userId, os = 'android', mccmnc = '45005', appVer }: any) {
     const body: any = {
       userId: Long.fromNumber(typeof userId === 'number' ? userId : parseInt(userId)),
       mccmnc,
       os,
     };
+    if (appVer) body.appVer = appVer;
 
     const res = await this.request('GETCONF', body);
     return normalizeGetConf(res.body);

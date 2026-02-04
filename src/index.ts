@@ -405,6 +405,15 @@ function runProcess(binPath: string, args: string[], timeoutMs = 0): Promise<voi
   });
 }
 
+function hasTrailerProfile(conf: any) {
+  const trailerInfo = conf?.trailerInfo || {};
+  const trailerHighInfo = conf?.trailerHighInfo || {};
+  const base = Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo;
+  const bitrate = Number(base?.videoTranscodingBitrate || 0);
+  const resolution = Number(base?.videoTranscodingResolution || 0);
+  return Number.isFinite(bitrate) && bitrate > 0 && Number.isFinite(resolution) && resolution > 0;
+}
+
 function waitForPushMethod(client: CarriageClient, method: string, timeoutMs: number) {
   let settled = false;
   let timer: NodeJS.Timeout | null = null;
@@ -1078,6 +1087,7 @@ export class KakaoForgeClient extends EventEmitter {
           userId: this.userId,
           os: this.os,
           mccmnc: this.mccmnc,
+          appVer: this.appVer,
         });
         this._conf = conf;
         const ticketHosts = [
@@ -1793,10 +1803,30 @@ export class KakaoForgeClient extends EventEmitter {
     return await this._carriage.write(chatId, text, msgType, writeOpts);
   }
 
-  _getVideoProfile(quality: VideoQuality) {
-    const conf = this._conf || {};
-    const trailerInfo = conf.trailerInfo || {};
-    const trailerHighInfo = conf.trailerHighInfo || {};
+  async _ensureVideoConf() {
+    if (this._conf && hasTrailerProfile(this._conf)) {
+      return this._conf;
+    }
+    const booking = new BookingClient();
+    try {
+      await booking.connect();
+      const conf = await booking.getConf({
+        userId: this.userId,
+        os: this.os,
+        mccmnc: this.mccmnc,
+        appVer: this.appVer,
+      });
+      this._conf = conf;
+      return conf;
+    } finally {
+      booking.disconnect();
+    }
+  }
+
+  async _getVideoProfile(quality: VideoQuality) {
+    const conf = await this._ensureVideoConf();
+    const trailerInfo = conf?.trailerInfo || {};
+    const trailerHighInfo = conf?.trailerHighInfo || {};
     const base = quality === 'high'
       ? (Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo)
       : trailerInfo;
@@ -1826,7 +1856,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const quality: VideoQuality = opts.videoQuality || this.videoQuality || 'high';
-    const profile = this._getVideoProfile(quality);
+    const profile = await this._getVideoProfile(quality);
     const resolution = Number(opts.videoResolution) > 0 ? Number(opts.videoResolution) : profile.resolution;
     const targetSize = computeTargetVideoSize(meta, resolution);
 
