@@ -71,7 +71,6 @@ export type MemberEvent = {
     ids: Array<number | string>;
     names: string[];
   };
-  memberIds?: Array<number | string>;
   members?: MessageEvent['sender'][];
   message?: MessageEvent;
   raw: any;
@@ -2796,7 +2795,6 @@ export class KakaoForgeClient extends EventEmitter {
         members.push(this._buildMemberRef(chatId, memberId, name));
       }
       event.member = { ids, names };
-      event.memberIds = ids;
       event.members = members;
     }
 
