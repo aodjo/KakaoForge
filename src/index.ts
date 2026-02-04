@@ -93,6 +93,12 @@ export type ReactionOptions = {
   reqId?: number | string;
 };
 
+export type EditMessageOptions = {
+  type?: number;
+  extra?: string | Record<string, any> | any[];
+  supplement?: string;
+};
+
 export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
 
 export type AttachmentSendOptions = SendOptions & UploadOptions & {
@@ -277,6 +283,8 @@ export type ChatModule = {
   sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
   sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
+  deleteMessage: (chatId: number | string, target: any) => Promise<any>;
+  editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -1138,6 +1146,52 @@ function normalizeReactionTarget(input: any): { logId: number | string; linkId?:
   return { logId, linkId, isOpenChat };
 }
 
+function normalizeLogTarget(input: any): number | string {
+  if (input === undefined || input === null) return 0;
+  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
+    return normalizeIdValue(input);
+  }
+
+  const message = input.message || input.chatLog || input.raw?.chatLog || input;
+  const logId = normalizeIdValue(
+    input.logId ||
+      input.msgId ||
+      input.id ||
+      message?.logId ||
+      message?.msgId ||
+      message?.id ||
+      input.raw?.logId ||
+      input.raw?.msgId ||
+      input.raw?.chatLog?.logId ||
+      0
+  );
+  return logId;
+}
+
+function normalizeEditTarget(input: any): { logId: number | string; type?: number; extra?: string } | null {
+  if (!input) return null;
+  const logId = normalizeLogTarget(input);
+  if (!logId) return null;
+
+  const message = input.message || input.chatLog || input.raw?.chatLog || input;
+  const type = safeNumber(
+    message?.type || message?.msgType || input.message?.type || input.type || MessageType.Text,
+    MessageType.Text
+  );
+  const extra =
+    typeof message?.extra === 'string'
+      ? message.extra
+      : typeof message?.attachment === 'string'
+        ? message.attachment
+        : typeof message?.attachments === 'string'
+          ? message.attachments
+          : typeof input.extra === 'string'
+            ? input.extra
+            : undefined;
+
+  return { logId, type, extra };
+}
+
 function pickFirstValue<T>(...values: T[]): T | undefined {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') {
@@ -1460,6 +1514,8 @@ export class KakaoForgeClient extends EventEmitter {
       sendReply: (chatId, text, replyTo, opts) => this.sendReply(chatId, text, replyTo, opts),
       sendThreadReply: (chatId, threadId, text, opts) => this.sendThreadReply(chatId, threadId, text, opts),
       sendReaction: (chatId, target, reactionType, opts) => this.sendReaction(chatId, target, reactionType, opts),
+      deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
+      editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
       uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
       uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
@@ -2705,6 +2761,73 @@ export class KakaoForgeClient extends EventEmitter {
 
     const resolvedChatId = this._resolveChatId(chatId);
     return await this._carriage.write(resolvedChatId, text, msgType, writeOpts);
+  }
+
+  /**
+   * Delete a message for everyone (DELETEMSG).
+   */
+  async deleteMessage(chatId: number | string, target: any) {
+    const logId = normalizeLogTarget(target);
+    if (!logId) {
+      throw new Error('deleteMessage requires a logId or MessageEvent');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const resolvedChatId = this._resolveChatId(chatId);
+    return await this._carriage.deleteMsg(resolvedChatId, logId);
+  }
+
+  /**
+   * Modify a text message within 24 hours (MODIFYMSG).
+   */
+  async editMessage(chatId: number | string, target: any, text: string, opts: EditMessageOptions = {}) {
+    const normalized = normalizeEditTarget(target);
+    if (!normalized?.logId) {
+      throw new Error('editMessage requires a logId or MessageEvent');
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed:', err.message);
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      throw new Error('LOCO not connected. Call client.connect() first.');
+    }
+
+    const type = typeof opts.type === 'number'
+      ? opts.type
+      : (normalized.type ?? MessageType.Text);
+    const extra =
+      opts.extra !== undefined
+        ? (typeof opts.extra === 'string' ? opts.extra : buildExtra(opts.extra as any))
+        : normalized.extra;
+    const resolvedChatId = this._resolveChatId(chatId);
+    return await this._carriage.modifyMsg(resolvedChatId, normalized.logId, text, {
+      type,
+      extra,
+      supplement: opts.supplement,
+    });
   }
 
   async _ensureVideoConf() {

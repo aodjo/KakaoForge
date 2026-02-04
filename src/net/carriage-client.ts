@@ -259,6 +259,47 @@ export class CarriageClient extends EventEmitter {
   }
 
   /**
+   * Delete a message for everyone (DELETEMSG).
+   */
+  async deleteMsg(chatId: number | string, logId: number | string) {
+    const toLong = toLongValue;
+    const body = {
+      chatId: toLong(chatId),
+      logId: toLong(logId),
+    };
+    const res = await this.request('DELETEMSG', body);
+    if (typeof res.status === 'number' && res.status !== 0) {
+      throw new Error(`DELETEMSG failed: status=${res.status}`);
+    }
+    return res;
+  }
+
+  /**
+   * Modify a message within 24 hours (MODIFYMSG).
+   */
+  async modifyMsg(
+    chatId: number | string,
+    logId: number | string,
+    msg: string,
+    opts: { type?: number; extra?: string; supplement?: string } = {}
+  ) {
+    const toLong = toLongValue;
+    const body: any = {
+      chatId: toLong(chatId),
+      logId: toLong(logId),
+      msg,
+      type: typeof opts.type === 'number' ? opts.type : 1,
+    };
+    if (opts.extra !== undefined) body.extra = opts.extra;
+    if (opts.supplement !== undefined) body.supplement = opts.supplement;
+    const res = await this.request('MODIFYMSG', body);
+    if (typeof res.status === 'number' && res.status !== 0) {
+      throw new Error(`MODIFYMSG failed: status=${res.status}`);
+    }
+    return res;
+  }
+
+  /**
    * Fetch chat list via LOCO (LCHATLIST).
    */
   async lchatList({
