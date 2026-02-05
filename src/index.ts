@@ -1258,7 +1258,7 @@ function findAllIndices(text: string, token: string) {
 
 function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
   if (!Array.isArray(mentions) || mentions.length === 0) return [];
-  const out = new Map<string, { user_id: number | string; at: number[]; len: number }>();
+  const result: Array<{ user_id: number | string; at: number[]; len: number }> = [];
 
   for (const input of mentions) {
     if (!input) continue;
@@ -1304,20 +1304,10 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
       if (!len || len <= 0) len = 1;
     }
 
-    const key = `${userId}:${len}`;
-    const existing = out.get(key);
-    if (existing) {
-      existing.at.push(...atList);
-      continue;
-    }
-    out.set(key, { user_id: userId, at: atList, len });
+    const cleanedAt = [...new Set(atList)].sort((a, b) => a - b);
+    result.push({ user_id: userId, at: cleanedAt, len });
   }
 
-  const result: Array<{ user_id: number | string; at: number[]; len: number }> = [];
-  for (const value of out.values()) {
-    value.at = [...new Set(value.at)].sort((a, b) => a - b);
-    result.push(value);
-  }
   return result;
 }
 
