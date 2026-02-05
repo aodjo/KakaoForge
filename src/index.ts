@@ -1202,7 +1202,7 @@ function buildMentionMarker(userId: number | string, name: string) {
     .split(MENTION_MARK_START).join('')
     .split(MENTION_MARK_MID).join('')
     .split(MENTION_MARK_END).join('');
-  return `${MENTION_MARK_START}${userId}${MENTION_MARK_MID}${safeName}${MENTION_MARK_END}@${safeName}`;
+  return `${MENTION_MARK_START}${userId}${MENTION_MARK_MID}${safeName}${MENTION_MARK_END}`;
 }
 
 function extractMarkedMentions(text: string): { text: string; mentions: MentionInput[] } {
