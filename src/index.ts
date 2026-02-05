@@ -1212,6 +1212,7 @@ function extractMarkedMentions(text: string): { text: string; mentions: MentionI
 
   let out = '';
   const mentions: MentionInput[] = [];
+  let mentionIndex = 0;
   let cursor = 0;
 
   while (cursor < text.length) {
@@ -1233,9 +1234,9 @@ function extractMarkedMentions(text: string): { text: string; mentions: MentionI
     const userId = text.slice(start + 1, mid);
     const name = text.slice(mid + 1, end);
     const mentionText = `@${name}`;
-    const at = out.length + 1;
+    mentionIndex += 1;
     const len = name.length || String(userId).length;
-    mentions.push({ userId, at: [at], len });
+    mentions.push({ userId, at: [mentionIndex], len });
     out += mentionText;
     cursor = end + 1;
   }
@@ -1260,7 +1261,47 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
   if (!Array.isArray(mentions) || mentions.length === 0) return [];
   const result: Array<{ user_id: number | string; at: number[]; len: number }> = [];
 
-  for (const input of mentions) {
+  const occurrenceBuckets = new Map<number, number[]>();
+  const occurrenceMeta: Array<{ idx: number; inputIndex: number }> = [];
+  const mentionTokens: string[] = [];
+  for (let i = 0; i < mentions.length; i += 1) {
+    const input = mentions[i];
+    const rawAt = (input as any)?.at;
+    const hasAt =
+      Array.isArray(rawAt)
+        ? rawAt.some((v) => safeNumber(v, -1) >= 0)
+        : typeof rawAt === 'number' && safeNumber(rawAt, -1) >= 0;
+    if (hasAt) continue;
+
+    const mentionText =
+      (input as any)?.text ??
+      (input as any)?.name ??
+      (input as any)?.nickname ??
+      (input as any)?.nickName ??
+      '';
+    if (!mentionText || !text) continue;
+    const trimmed = String(mentionText);
+    const token = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+    mentionTokens[i] = token;
+    const hits = findAllIndices(text, token);
+    for (const idx of hits) {
+      occurrenceMeta.push({ idx, inputIndex: i });
+    }
+  }
+
+  if (occurrenceMeta.length > 0) {
+    occurrenceMeta.sort((a, b) => a.idx - b.idx);
+    let ordinal = 0;
+    for (const entry of occurrenceMeta) {
+      ordinal += 1;
+      const list = occurrenceBuckets.get(entry.inputIndex) || [];
+      list.push(ordinal);
+      occurrenceBuckets.set(entry.inputIndex, list);
+    }
+  }
+
+  for (let inputIndex = 0; inputIndex < mentions.length; inputIndex += 1) {
+    const input = mentions[inputIndex];
     if (!input) continue;
     const userId = normalizeIdValue(
       (input as any).userId ?? (input as any).user_id ?? (input as any).id ?? 0
@@ -1282,20 +1323,8 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
       '';
 
     let len = safeNumber((input as any).len ?? (input as any).length, 0);
-    if (atList.length === 0 && mentionText && text) {
-      const trimmed = String(mentionText);
-      const token = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
-      const hits = findAllIndices(text, token);
-      if (hits.length > 0) {
-        atList = hits.map((idx) => idx + 1);
-        len = trimmed.length;
-      } else {
-        const fallbackHits = findAllIndices(text, trimmed);
-        if (fallbackHits.length > 0) {
-          atList = fallbackHits.map((idx) => idx + 1);
-          len = trimmed.length;
-        }
-      }
+    if (atList.length === 0 && occurrenceBuckets.has(inputIndex)) {
+      atList = occurrenceBuckets.get(inputIndex) || [];
     }
 
     if (atList.length === 0) continue;
