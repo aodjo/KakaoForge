@@ -343,6 +343,7 @@ export type ChatModule = {
   deleteMessage: (chatId: number | string, target: any) => Promise<any>;
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
+  mention: (userId: number | string, nameOrChatId?: string | number, chatId?: number | string) => string;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadAudio: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -1192,6 +1193,56 @@ function extractMentions(raw: any): any[] | undefined {
   return undefined;
 }
 
+const MENTION_MARK_START = '\u0002';
+const MENTION_MARK_MID = '\u0003';
+const MENTION_MARK_END = '\u0004';
+
+function buildMentionMarker(userId: number | string, name: string) {
+  const safeName = String(name || '')
+    .split(MENTION_MARK_START).join('')
+    .split(MENTION_MARK_MID).join('')
+    .split(MENTION_MARK_END).join('');
+  return `${MENTION_MARK_START}${userId}${MENTION_MARK_MID}${safeName}${MENTION_MARK_END}@${safeName}`;
+}
+
+function extractMarkedMentions(text: string): { text: string; mentions: MentionInput[] } {
+  if (!text || !text.includes(MENTION_MARK_START)) {
+    return { text, mentions: [] };
+  }
+
+  let out = '';
+  const mentions: MentionInput[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const start = text.indexOf(MENTION_MARK_START, cursor);
+    if (start === -1) {
+      out += text.slice(cursor);
+      break;
+    }
+
+    out += text.slice(cursor, start);
+    const mid = text.indexOf(MENTION_MARK_MID, start + 1);
+    const end = text.indexOf(MENTION_MARK_END, mid + 1);
+    if (mid === -1 || end === -1) {
+      out += text.slice(start, start + 1);
+      cursor = start + 1;
+      continue;
+    }
+
+    const userId = text.slice(start + 1, mid);
+    const name = text.slice(mid + 1, end);
+    const mentionText = `@${name}`;
+    const at = out.length + 1;
+    const len = name.length || String(userId).length;
+    mentions.push({ userId, at: [at], len });
+    out += mentionText;
+    cursor = end + 1;
+  }
+
+  return { text: out, mentions };
+}
+
 function findAllIndices(text: string, token: string) {
   if (!token) return [];
   const indices: number[] = [];
@@ -1937,6 +1988,7 @@ export class KakaoForgeClient extends EventEmitter {
   _memberCacheUpdatedAt: Map<string, number>;
   _memberRefreshTimer: NodeJS.Timeout | null;
   _messageChains: Map<string, Promise<void>>;
+  _activeChatId: number | string | null;
   _connectPromise: Promise<any> | null;
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
@@ -2040,6 +2092,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._memberCacheUpdatedAt = new Map();
     this._memberRefreshTimer = null;
     this._messageChains = new Map();
+    this._activeChatId = null;
     this._connectPromise = null;
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
@@ -2058,6 +2111,7 @@ export class KakaoForgeClient extends EventEmitter {
       deleteMessage: (chatId, target) => this.deleteMessage(chatId, target),
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
+      mention: (userId, nameOrChatId, chatId) => this._mention(userId, nameOrChatId, chatId),
       uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
       uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
       uploadAudio: (filePath, opts) => this.uploadAudio(filePath, opts),
@@ -2709,6 +2763,8 @@ export class KakaoForgeClient extends EventEmitter {
     const msg = await this._buildMessageEvent(data);
     if (!msg) return;
 
+    this._activeChatId = msg.room.id;
+
     const clientType = this._resolveMemberType(msg.room.id, this.userId);
     this.type = clientType;
     this.chat.type = clientType;
@@ -2987,6 +3043,39 @@ export class KakaoForgeClient extends EventEmitter {
     const name = fallbackName || this._getCachedMemberName(chatId, userId) || '';
     const type = this._resolveMemberType(chatId, userId);
     return { id: userId, name, type };
+  }
+
+  _mention(userId: number | string, nameOrChatId?: string | number, chatId?: number | string) {
+    let name = '';
+    let resolvedChatId: number | string | null = null;
+
+    if (chatId !== undefined && chatId !== null) {
+      resolvedChatId = chatId;
+      if (typeof nameOrChatId === 'string') {
+        name = nameOrChatId;
+      }
+    } else if (nameOrChatId !== undefined && nameOrChatId !== null) {
+      if (typeof nameOrChatId === 'number') {
+        resolvedChatId = nameOrChatId;
+      } else if (typeof nameOrChatId === 'string' && /^\d+$/.test(nameOrChatId)) {
+        resolvedChatId = nameOrChatId;
+      } else if (typeof nameOrChatId === 'string') {
+        name = nameOrChatId;
+      }
+    }
+
+    if (!name) {
+      const fallbackChatId = resolvedChatId ?? this._activeChatId ?? null;
+      if (fallbackChatId !== null && fallbackChatId !== undefined) {
+        name = this._getCachedMemberName(fallbackChatId, userId) || '';
+      }
+    }
+
+    if (!name) {
+      name = String(userId);
+    }
+
+    return buildMentionMarker(userId, name);
   }
 
   _buildRoomPayload(chatId: number | string): MessageEvent['room'] {
@@ -3925,6 +4014,16 @@ export class KakaoForgeClient extends EventEmitter {
     }
     if (!opts || typeof opts !== 'object') opts = {};
 
+    let messageText = text || '';
+    const extracted = extractMarkedMentions(messageText);
+    if (extracted.mentions.length > 0) {
+      messageText = extracted.text;
+      const mergedMentions = Array.isArray(opts.mentions)
+        ? [...opts.mentions, ...extracted.mentions]
+        : extracted.mentions;
+      opts = { ...opts, mentions: mergedMentions };
+    }
+
     const msgId = opts.msgId !== undefined && opts.msgId !== null ? opts.msgId : this._nextClientMsgId();
     const writeOpts = {
       ...opts,
@@ -3933,7 +4032,7 @@ export class KakaoForgeClient extends EventEmitter {
       scope: typeof opts.scope === 'number' ? opts.scope : 1,
       silence: opts.silence ?? opts.isSilence ?? false,
     };
-    const normalizedMentions = normalizeMentionInputs(text || '', opts.mentions);
+    const normalizedMentions = normalizeMentionInputs(messageText || '', opts.mentions);
     if (normalizedMentions.length > 0) {
       const sourceExtra: any = opts.extra as any;
       let extraObj: any = {};
@@ -3960,7 +4059,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const resolvedChatId = this._resolveChatId(chatId);
-    return await this._carriage.write(resolvedChatId, text, msgType, writeOpts);
+    return await this._carriage.write(resolvedChatId, messageText, msgType, writeOpts);
   }
 
   /**
