@@ -5406,6 +5406,8 @@ export class KakaoForgeClient extends EventEmitter {
   }
 }
 
+let _lastClient: KakaoForgeClient | null = null;
+
 export function createClient(config: KakaoForgeConfig = {}) {
   let merged: KakaoForgeConfig = { ...config };
   const missingAuth = !merged.userId || !merged.oauthToken || !merged.deviceUuid;
@@ -5445,6 +5447,7 @@ export function createClient(config: KakaoForgeConfig = {}) {
   }
 
   const client = new KakaoForgeClient(merged);
+  _lastClient = client;
   const autoConnect = merged.autoConnect !== false;
   if (autoConnect) {
     client.connect().catch((err) => {
@@ -5452,6 +5455,14 @@ export function createClient(config: KakaoForgeConfig = {}) {
     });
   }
   return client;
+}
+
+export function Mention(userId: number | string, nameOrChatId?: string | number, chatId?: number | string) {
+  if (_lastClient) {
+    return _lastClient._mention(userId, nameOrChatId, chatId);
+  }
+  const name = typeof nameOrChatId === 'string' ? nameOrChatId : String(userId);
+  return buildMentionMarker(userId, name);
 }
 
 export const KakaoBot = KakaoForgeClient;
