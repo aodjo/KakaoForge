@@ -94,6 +94,7 @@ export type SendOptions = {
   isSilence?: boolean;
   type?: number;
   mentions?: MentionInput[];
+  spoilers?: SpoilerInput[];
 };
 
 export type ReplyTarget = {
@@ -127,6 +128,14 @@ export type MentionInput = {
   name?: string;
   nickname?: string;
   nickName?: string;
+};
+
+export type SpoilerInput = {
+  loc?: number;
+  len?: number;
+  length?: number;
+  start?: number;
+  end?: number;
 };
 
 
@@ -344,6 +353,7 @@ export type ChatModule = {
   editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
   send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
   mention: (userId: number | string, nameOrChatId?: string | number, chatId?: number | string) => string;
+  spoiler: (text: string) => string;
   uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
   uploadAudio: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
@@ -1196,6 +1206,8 @@ function extractMentions(raw: any): any[] | undefined {
 const MENTION_MARK_START = '\u0002';
 const MENTION_MARK_MID = '\u0003';
 const MENTION_MARK_END = '\u0004';
+const SPOILER_MARK_START = '\u0005';
+const SPOILER_MARK_END = '\u0006';
 
 function buildMentionMarker(userId: number | string, name: string) {
   const safeName = String(name || '')
@@ -1203,6 +1215,13 @@ function buildMentionMarker(userId: number | string, name: string) {
     .split(MENTION_MARK_MID).join('')
     .split(MENTION_MARK_END).join('');
   return `${MENTION_MARK_START}${userId}${MENTION_MARK_MID}${safeName}${MENTION_MARK_END}`;
+}
+
+function buildSpoilerMarker(text: string) {
+  const safeText = String(text || '')
+    .split(SPOILER_MARK_START).join('')
+    .split(SPOILER_MARK_END).join('');
+  return `${SPOILER_MARK_START}${safeText}${SPOILER_MARK_END}`;
 }
 
 function extractMarkedMentions(text: string): { text: string; mentions: MentionInput[] } {
@@ -1242,6 +1261,43 @@ function extractMarkedMentions(text: string): { text: string; mentions: MentionI
   }
 
   return { text: out, mentions };
+}
+
+function extractMarkedSpoilers(text: string): { text: string; spoilers: SpoilerInput[] } {
+  if (!text || !text.includes(SPOILER_MARK_START)) {
+    return { text, spoilers: [] };
+  }
+
+  let out = '';
+  const spoilers: SpoilerInput[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const start = text.indexOf(SPOILER_MARK_START, cursor);
+    if (start === -1) {
+      out += text.slice(cursor);
+      break;
+    }
+
+    out += text.slice(cursor, start);
+    const end = text.indexOf(SPOILER_MARK_END, start + 1);
+    if (end === -1) {
+      out += text.slice(start, start + 1);
+      cursor = start + 1;
+      continue;
+    }
+
+    const spoilerText = text.slice(start + 1, end);
+    const loc = out.length;
+    const len = spoilerText.length;
+    if (len > 0) {
+      spoilers.push({ loc, len });
+    }
+    out += spoilerText;
+    cursor = end + 1;
+  }
+
+  return { text: out, spoilers };
 }
 
 function findAllIndices(text: string, token: string) {
@@ -1337,6 +1393,36 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
     result.push({ user_id: userId, at: cleanedAt, len });
   }
 
+  return result;
+}
+
+function normalizeSpoilerInputs(text: string, spoilers?: SpoilerInput[]) {
+  if (!Array.isArray(spoilers) || spoilers.length === 0) return [];
+  const result: Array<{ loc: number; len: number }> = [];
+  const maxLen = text ? text.length : 0;
+
+  for (const input of spoilers) {
+    if (!input) continue;
+    let loc = safeNumber(input.loc ?? input.start, -1);
+    let len = safeNumber(input.len ?? input.length, 0);
+    if ((!len || len <= 0) && input.end !== undefined) {
+      const end = safeNumber(input.end, -1);
+      if (end >= 0 && loc >= 0) {
+        len = end - loc;
+      }
+    }
+    if (loc < 0 || len <= 0) continue;
+    if (maxLen > 0) {
+      if (loc >= maxLen) continue;
+      if (loc + len > maxLen) {
+        len = maxLen - loc;
+      }
+      if (len <= 0) continue;
+    }
+    result.push({ loc, len });
+  }
+
+  result.sort((a, b) => a.loc - b.loc);
   return result;
 }
 
@@ -2131,6 +2217,7 @@ export class KakaoForgeClient extends EventEmitter {
       editMessage: (chatId, target, text, opts) => this.editMessage(chatId, target, text, opts),
       send: (chatId, text, opts) => this.sendMessage(chatId, text, opts),
       mention: (userId, nameOrChatId, chatId) => this._mention(userId, nameOrChatId, chatId),
+      spoiler: (text) => buildSpoilerMarker(text),
       uploadPhoto: (filePath, opts) => this.uploadPhoto(filePath, opts),
       uploadVideo: (filePath, opts) => this.uploadVideo(filePath, opts),
       uploadAudio: (filePath, opts) => this.uploadAudio(filePath, opts),
@@ -4034,13 +4121,22 @@ export class KakaoForgeClient extends EventEmitter {
     if (!opts || typeof opts !== 'object') opts = {};
 
     let messageText = text || '';
-    const extracted = extractMarkedMentions(messageText);
-    if (extracted.mentions.length > 0) {
-      messageText = extracted.text;
+    const extractedMentions = extractMarkedMentions(messageText);
+    if (extractedMentions.mentions.length > 0) {
+      messageText = extractedMentions.text;
       const mergedMentions = Array.isArray(opts.mentions)
-        ? [...opts.mentions, ...extracted.mentions]
-        : extracted.mentions;
+        ? [...opts.mentions, ...extractedMentions.mentions]
+        : extractedMentions.mentions;
       opts = { ...opts, mentions: mergedMentions };
+    }
+
+    const extractedSpoilers = extractMarkedSpoilers(messageText);
+    if (extractedSpoilers.spoilers.length > 0) {
+      messageText = extractedSpoilers.text;
+      const mergedSpoilers = Array.isArray(opts.spoilers)
+        ? [...opts.spoilers, ...extractedSpoilers.spoilers]
+        : extractedSpoilers.spoilers;
+      opts = { ...opts, spoilers: mergedSpoilers };
     }
 
     const msgId = opts.msgId !== undefined && opts.msgId !== null ? opts.msgId : this._nextClientMsgId();
@@ -4052,13 +4148,19 @@ export class KakaoForgeClient extends EventEmitter {
       silence: opts.silence ?? opts.isSilence ?? false,
     };
     const normalizedMentions = normalizeMentionInputs(messageText || '', opts.mentions);
-    if (normalizedMentions.length > 0) {
+    const normalizedSpoilers = normalizeSpoilerInputs(messageText || '', opts.spoilers);
+    if (normalizedMentions.length > 0 || normalizedSpoilers.length > 0) {
       const sourceExtra: any = opts.extra as any;
       let extraObj: any = {};
       if (sourceExtra && typeof sourceExtra === 'object' && !Array.isArray(sourceExtra)) {
         extraObj = { ...sourceExtra };
       }
-      extraObj.mentions = normalizedMentions;
+      if (normalizedMentions.length > 0) {
+        extraObj.mentions = normalizedMentions;
+      }
+      if (normalizedSpoilers.length > 0) {
+        extraObj.spoilers = normalizedSpoilers;
+      }
       writeOpts.extra = buildExtra(extraObj);
     }
 
@@ -5482,6 +5584,10 @@ export function Mention(userId: number | string, nameOrChatId?: string | number,
   }
   const name = typeof nameOrChatId === 'string' ? nameOrChatId : String(userId);
   return buildMentionMarker(userId, name);
+}
+
+export function Spoiler(text: string) {
+  return buildSpoilerMarker(text);
 }
 
 export const KakaoBot = KakaoForgeClient;
