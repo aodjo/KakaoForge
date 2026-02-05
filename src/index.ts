@@ -93,6 +93,7 @@ export type SendOptions = {
   silence?: boolean;
   isSilence?: boolean;
   type?: number;
+  mentions?: MentionInput[];
 };
 
 export type ReplyTarget = {
@@ -113,6 +114,19 @@ export type ReplyOptions = SendOptions & {
 export type ReactionOptions = {
   linkId?: number | string;
   reqId?: number | string;
+};
+
+export type MentionInput = {
+  userId?: number | string;
+  user_id?: number | string;
+  id?: number | string;
+  at?: number[] | number;
+  len?: number;
+  length?: number;
+  text?: string;
+  name?: string;
+  nickname?: string;
+  nickName?: string;
 };
 
 
@@ -1176,6 +1190,83 @@ function extractMentions(raw: any): any[] | undefined {
     return raw.mentions;
   }
   return undefined;
+}
+
+function findAllIndices(text: string, token: string) {
+  if (!token) return [];
+  const indices: number[] = [];
+  let start = 0;
+  while (start <= text.length) {
+    const idx = text.indexOf(token, start);
+    if (idx === -1) break;
+    indices.push(idx);
+    start = idx + token.length;
+  }
+  return indices;
+}
+
+function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
+  if (!Array.isArray(mentions) || mentions.length === 0) return [];
+  const out = new Map<string, { user_id: number | string; at: number[]; len: number }>();
+
+  for (const input of mentions) {
+    if (!input) continue;
+    const userId = normalizeIdValue(
+      (input as any).userId ?? (input as any).user_id ?? (input as any).id ?? 0
+    );
+    if (!userId) continue;
+
+    const rawAt = (input as any).at;
+    let atList = Array.isArray(rawAt) ? rawAt.map((v) => safeNumber(v, -1)).filter((v) => v >= 0) : [];
+    if (typeof rawAt === 'number') {
+      const idx = safeNumber(rawAt, -1);
+      if (idx >= 0) atList = [idx];
+    }
+
+    const mentionText =
+      (input as any).text ??
+      (input as any).name ??
+      (input as any).nickname ??
+      (input as any).nickName ??
+      '';
+
+    let len = safeNumber((input as any).len ?? (input as any).length, 0);
+    if (atList.length === 0 && mentionText && text) {
+      const trimmed = String(mentionText);
+      const token = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+      const hits = findAllIndices(text, token);
+      if (hits.length > 0) {
+        atList = hits;
+        len = token.length;
+      } else {
+        const fallbackHits = findAllIndices(text, trimmed);
+        if (fallbackHits.length > 0) {
+          atList = fallbackHits;
+          len = trimmed.length;
+        }
+      }
+    }
+
+    if (atList.length === 0) continue;
+    if (!len || len <= 0) {
+      len = 1;
+    }
+
+    const key = `${userId}:${len}`;
+    const existing = out.get(key);
+    if (existing) {
+      existing.at.push(...atList);
+      continue;
+    }
+    out.set(key, { user_id: userId, at: atList, len });
+  }
+
+  const result: Array<{ user_id: number | string; at: number[]; len: number }> = [];
+  for (const value of out.values()) {
+    value.at = [...new Set(value.at)].sort((a, b) => a - b);
+    result.push(value);
+  }
+  return result;
 }
 
 function normalizeIdValue(value: any): number | string {
@@ -2438,7 +2529,9 @@ export class KakaoForgeClient extends EventEmitter {
     console.log(`[*] Connecting to Carriage server ${checkinResult.host}:${checkinResult.port}...`);
     this._carriage = new CarriageClient();
 
-    this._carriage.on('push', (packet) => this._onPush(packet));
+    this._carriage.on('push', (packet) => {
+      void this._onPush(packet);
+    });
     this._carriage.on('error', (err) => console.error('[!] Carriage error:', err.message));
     this._carriage.on('disconnected', () => {
       console.log('[!] Disconnected from Carriage');
@@ -2519,7 +2612,7 @@ export class KakaoForgeClient extends EventEmitter {
     throw new Error('Ticket CHECKIN failed: no endpoints attempted');
   }
 
-  _onPush(packet) {
+  async _onPush(packet) {
     // Emit to specific push handlers
     const handler = this._pushHandlers.get(packet.method);
     if (handler) {
@@ -2528,7 +2621,8 @@ export class KakaoForgeClient extends EventEmitter {
 
     const memberAction = resolveMemberActionFromPush(packet.method);
     if (memberAction) {
-      if (this._emitMemberEventFromPush(memberAction, packet)) {
+      const handled = await this._emitMemberEventFromPush(memberAction, packet);
+      if (handled) {
         return;
       }
     }
@@ -2676,7 +2770,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._emitMemberEvent(action, event);
   }
 
-  _emitMemberEventFromPush(action: MemberAction, packet: any) {
+  async _emitMemberEventFromPush(action: MemberAction, packet: any) {
     const body = packet?.body || {};
     const chatLog = extractChatLogPayload(body.chatLog || body.chatlog || body);
     const roomId = normalizeIdValue(
@@ -2752,6 +2846,83 @@ export class KakaoForgeClient extends EventEmitter {
     if (memberIds.length === 0 && actorId && (resolvedAction === 'join' || resolvedAction === 'leave')) {
       memberIds = [actorId];
     }
+
+    const roomKey = String(roomId);
+    const roomPayload = this._buildRoomPayload(roomId);
+    const hasName = (idValue: any) => {
+      if (!idValue) return false;
+      const key = String(idValue);
+      const fromMap = nameMap.get(key);
+      if (fromMap) return true;
+      return Boolean(this._getCachedMemberName(roomId, idValue));
+    };
+    const missingRoomName = !roomPayload.name;
+    const missingActorName = actorId ? !hasName(actorId) : false;
+    let missingMemberName = false;
+    for (const memberId of memberIds) {
+      if (!hasName(memberId)) {
+        missingMemberName = true;
+        break;
+      }
+    }
+
+    if (missingRoomName || missingActorName || missingMemberName) {
+      const roomInfo = this._chatRooms.get(roomKey) || {};
+      const flags = resolveRoomFlags({ ...roomInfo, ...body, ...chatLog });
+      if (flags.isOpenChat) {
+        await this._ensureOpenChatInfo(roomId, actorId || memberIds[0]);
+        const refreshed = this._chatRooms.get(roomKey) || {};
+        const linkId = normalizeIdValue(
+          refreshed.openLinkId || refreshed.openChatId || refreshed.li || body?.li || body?.linkId || chatLog?.li || 0
+        );
+        if (linkId && !this._buildRoomPayload(roomId).name) {
+          await this._ensureOpenLinkName(linkId);
+        }
+      } else {
+        await this._ensureChatInfo(roomId);
+        await this._waitForMemberList(roomId, this.memberLookupTimeoutMs);
+      }
+
+      const missingIds = new Set<number | string>();
+      if (actorId && !this._getCachedMemberName(roomId, actorId)) {
+        missingIds.add(actorId);
+      }
+      for (const memberId of memberIds) {
+        if (memberId && !this._getCachedMemberName(roomId, memberId)) {
+          missingIds.add(memberId);
+        }
+      }
+      if (missingIds.size > 0) {
+        await Promise.all(
+          [...missingIds].map((id) => this._waitForMemberName(roomId, id, this.memberLookupTimeoutMs))
+        );
+      }
+
+      if (!flags.isOpenChat) {
+        const derived = this._buildRoomNameFromMembers(roomKey);
+        if (derived) {
+          const prev = this._chatRooms.get(roomKey) || {};
+          this._chatRooms.set(roomKey, { ...prev, roomName: derived });
+        }
+      }
+    }
+
+    const filledNameMap = new Map<string, string>(nameMap);
+    const fillName = (idValue: any) => {
+      if (!idValue) return;
+      const cached = this._getCachedMemberName(roomId, idValue);
+      if (cached && !filledNameMap.get(String(idValue))) {
+        filledNameMap.set(String(idValue), cached);
+      }
+    };
+    if (actorId) {
+      fillName(actorId);
+      actorName = filledNameMap.get(String(actorId)) || this._getCachedMemberName(roomId, actorId) || actorName;
+    }
+    for (const memberId of memberIds) {
+      fillName(memberId);
+    }
+    nameMap = filledNameMap;
 
     if (this.debug && (!actorId || memberIds.length === 0)) {
       console.log(`[DBG] memberEvent incomplete (${packet.method})`, previewLossless({ body, chatLog }));
@@ -3761,6 +3932,19 @@ export class KakaoForgeClient extends EventEmitter {
       scope: typeof opts.scope === 'number' ? opts.scope : 1,
       silence: opts.silence ?? opts.isSilence ?? false,
     };
+    const normalizedMentions = normalizeMentionInputs(text || '', opts.mentions);
+    if (normalizedMentions.length > 0) {
+      const parsedExtra = parseAttachmentJson(writeOpts.extra);
+      let extraObj: any = parsedExtra;
+      if (Array.isArray(extraObj)) {
+        extraObj = { attachments: extraObj };
+      }
+      if (!extraObj || typeof extraObj !== 'object') {
+        extraObj = {};
+      }
+      extraObj.mentions = normalizedMentions;
+      writeOpts.extra = buildExtra(extraObj);
+    }
 
     if (!this._carriage && !this._locoAutoConnectAttempted) {
       this._locoAutoConnectAttempted = true;
