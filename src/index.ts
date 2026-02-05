@@ -1236,12 +1236,12 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
       const token = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
       const hits = findAllIndices(text, token);
       if (hits.length > 0) {
-        atList = hits;
-        len = token.length;
+        atList = hits.map((idx) => idx + 1);
+        len = trimmed.length;
       } else {
         const fallbackHits = findAllIndices(text, trimmed);
         if (fallbackHits.length > 0) {
-          atList = fallbackHits;
+          atList = fallbackHits.map((idx) => idx + 1);
           len = trimmed.length;
         }
       }
@@ -1249,7 +1249,8 @@ function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
 
     if (atList.length === 0) continue;
     if (!len || len <= 0) {
-      len = 1;
+      len = mentionText ? String(mentionText).replace(/^@/, '').length : 1;
+      if (!len || len <= 0) len = 1;
     }
 
     const key = `${userId}:${len}`;
@@ -3934,13 +3935,10 @@ export class KakaoForgeClient extends EventEmitter {
     };
     const normalizedMentions = normalizeMentionInputs(text || '', opts.mentions);
     if (normalizedMentions.length > 0) {
-      const parsedExtra = parseAttachmentJson(writeOpts.extra);
-      let extraObj: any = parsedExtra;
-      if (Array.isArray(extraObj)) {
-        extraObj = { attachments: extraObj };
-      }
-      if (!extraObj || typeof extraObj !== 'object') {
-        extraObj = {};
+      const sourceExtra: any = opts.extra as any;
+      let extraObj: any = {};
+      if (sourceExtra && typeof sourceExtra === 'object' && !Array.isArray(sourceExtra)) {
+        extraObj = { ...sourceExtra };
       }
       extraObj.mentions = normalizedMentions;
       writeOpts.extra = buildExtra(extraObj);
