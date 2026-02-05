@@ -694,19 +694,30 @@ function buildSpamChatLogInfo(raw: any): string | null {
   if (!chatLog || typeof chatLog !== 'object') return null;
 
   const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
+  const attachmentJson = parseAttachmentJson(attachmentRaw);
   let message = chatLog.message ?? chatLog.msg ?? chatLog.text ?? '';
-  if (isBlankText(message) && typeof attachmentRaw === 'string') {
+  if (isBlankText(message) && typeof attachmentRaw === 'string' && attachmentJson === null) {
     message = attachmentRaw;
   }
   message = truncateChatLogMessage(String(message ?? ''));
 
-  const attachmentJson = parseAttachmentJson(attachmentRaw);
+  const hasAttachmentRaw =
+    attachmentRaw !== undefined &&
+    attachmentRaw !== null &&
+    !(typeof attachmentRaw === 'string' && attachmentRaw.trim().length === 0);
   const messageBody: any = {};
   if (!isBlankText(message)) {
     messageBody.message = message;
   }
-  if (attachmentJson && (Array.isArray(attachmentJson) ? attachmentJson.length > 0 : Object.keys(attachmentJson).length > 0)) {
-    messageBody.attachment = attachmentJson;
+  if (attachmentJson !== null) {
+    const isArray = Array.isArray(attachmentJson);
+    const isObject = !isArray && typeof attachmentJson === 'object';
+    const hasContent = isArray ? attachmentJson.length > 0 : isObject ? Object.keys(attachmentJson).length > 0 : true;
+    if (hasContent || hasAttachmentRaw) {
+      messageBody.attachment = attachmentJson;
+    }
+  } else if (hasAttachmentRaw) {
+    messageBody.attachment = attachmentRaw;
   }
   if (typeof chatLog.referer === 'number') {
     messageBody.referer = chatLog.referer;
@@ -5380,7 +5391,21 @@ export class KakaoForgeClient extends EventEmitter {
   async openChatBlind(chatId: number | string, target: any, opts: OpenChatBlindOptions = {}) {
     if (!this._carriage) throw new Error('LOCO not connected');
     const resolvedChatId = this._resolveChatId(chatId);
-    const targetInfo = normalizeOpenChatBlindTarget(target);
+    const logIdValue = normalizeLogTarget(target);
+    let targetInfo = normalizeOpenChatBlindTarget(target);
+    if (logIdValue && (!targetInfo?.memberId || !targetInfo?.chatLogInfo)) {
+      try {
+        const fetched = await this.fetchMessage(resolvedChatId, logIdValue);
+        const fetchedInfo = normalizeOpenChatBlindTarget(fetched);
+        if (fetchedInfo) {
+          targetInfo = { ...fetchedInfo, ...(targetInfo || {}) };
+        }
+      } catch (err) {
+        if (this.debug) {
+          console.error('[DBG] openChatBlind fetchMessage failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
     if (!targetInfo?.memberId) {
       throw new Error('open chat blind requires MessageEvent or raw chatLog');
     }
