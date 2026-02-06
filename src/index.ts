@@ -3309,8 +3309,22 @@ export class KakaoForgeClient extends EventEmitter {
       body.name ||
       body.actorName ||
       '';
-    const actorName =
-      rawActorName || this._getCachedMemberName(roomIdValue, actorIdValue) || (actorIdValue ? String(actorIdValue) : '');
+    let actorName = rawActorName || this._getCachedMemberName(roomIdValue, actorIdValue) || '';
+    if (!actorName && actorIdValue) {
+      const roomKey = String(roomIdValue);
+      const roomInfo = this._chatRooms.get(roomKey) || {};
+      const flags = resolveRoomFlags({ ...roomInfo, ...body, ...chatLog });
+      if (flags.isOpenChat) {
+        await this._ensureOpenChatInfo(roomIdValue, actorIdValue);
+      } else {
+        await this._ensureChatInfo(roomIdValue);
+      }
+      await this._waitForMemberName(roomIdValue, actorIdValue, this.memberLookupTimeoutMs);
+      actorName = this._getCachedMemberName(roomIdValue, actorIdValue) || '';
+    }
+    if (!actorName && actorIdValue) {
+      actorName = String(actorIdValue);
+    }
     const actor = this._buildMemberRef(roomIdValue, actorIdValue || 0, actorName);
 
     const base = {
