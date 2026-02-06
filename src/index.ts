@@ -1685,7 +1685,7 @@ const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
 };
 
 const PUSH_DELETE_ACTIONS = new Set(['DELETEMSG', 'DELMSG', 'DELM', 'DELMESSAGE', 'MSGDEL']);
-const PUSH_HIDE_ACTIONS = new Set(['BLIND', 'BLINDMSG', 'HIDEMSG', 'HIDE']);
+const PUSH_HIDE_ACTIONS = new Set(['BLIND', 'BLINDMSG', 'HIDEMSG', 'HIDE', 'SYNCREWR']);
 
 const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
   4: 'join',
@@ -3223,6 +3223,15 @@ export class KakaoForgeClient extends EventEmitter {
   _buildModerationEventFromPush(type: 'delete' | 'hide', packet: any): DeleteEvent | HideEvent | null {
     const body = packet?.body || {};
     const chatLog = extractChatLogPayload(body.chatLog || body.chatlog || body);
+    const attachmentRaw =
+      chatLog?.attachment ??
+      chatLog?.attachments ??
+      chatLog?.extra ??
+      body?.attachment ??
+      body?.attachments ??
+      body?.extra ??
+      null;
+    const attachmentJson = parseAttachmentJson(attachmentRaw);
     const roomIdValue = normalizeIdValue(
       body.chatId || body.c || body.roomId || body.chatRoomId || chatLog?.chatId || chatLog?.c || 0
     ) || this._activeChatId || 0;
@@ -3286,8 +3295,22 @@ export class KakaoForgeClient extends EventEmitter {
     } as DeleteEvent | HideEvent;
 
     if (type === 'hide') {
-      const categoryRaw = body.category || body.cat || body.reason || body.reportCategory;
-      const reportRaw = body.report ?? body.r ?? body.reported;
+      const categoryRaw =
+        body.category ||
+        body.cat ||
+        body.reason ||
+        body.reportCategory ||
+        attachmentJson?.category ||
+        attachmentJson?.cat ||
+        attachmentJson?.reason ||
+        attachmentJson?.reportCategory;
+      const reportRaw =
+        body.report ??
+        body.r ??
+        body.reported ??
+        attachmentJson?.report ??
+        attachmentJson?.r ??
+        attachmentJson?.reported;
       const report =
         typeof reportRaw === 'boolean'
           ? reportRaw
