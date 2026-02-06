@@ -3286,12 +3286,6 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    const roomBase = this._buildRoomPayload(roomIdValue);
-    const room =
-      openLinkIdValue && !roomBase.openLinkId
-        ? { ...roomBase, openLinkId: openLinkIdValue }
-        : roomBase;
-
     const actorIdValue = normalizeIdValue(
       body.userId ||
         body.actorId ||
@@ -3326,6 +3320,33 @@ export class KakaoForgeClient extends EventEmitter {
       actorName = String(actorIdValue);
     }
     const actor = this._buildMemberRef(roomIdValue, actorIdValue || 0, actorName);
+
+    let roomBase = this._buildRoomPayload(roomIdValue);
+    if (!roomBase.name) {
+      const roomKey = String(roomIdValue);
+      const roomInfo = this._chatRooms.get(roomKey) || {};
+      const flags = resolveRoomFlags({ ...roomInfo, ...body, ...chatLog });
+      if (flags.isOpenChat) {
+        await this._ensureOpenChatInfo(roomIdValue, actorIdValue || undefined);
+        let linkIdToUse = openLinkIdValue;
+        if (!linkIdToUse) {
+          const refreshed = this._chatRooms.get(roomKey) || {};
+          linkIdToUse = normalizeIdValue(
+            refreshed.openLinkId || refreshed.openChatId || refreshed.li || 0
+          );
+        }
+        if (linkIdToUse && linkIdToUse !== 0 && linkIdToUse !== '0') {
+          await this._ensureOpenLinkName(linkIdToUse);
+        }
+      } else {
+        await this._ensureChatInfo(roomIdValue);
+      }
+      roomBase = this._buildRoomPayload(roomIdValue);
+    }
+    let room = roomBase;
+    if (openLinkIdValue && !roomBase.openLinkId) {
+      room = { ...roomBase, openLinkId: openLinkIdValue };
+    }
 
     const base = {
       type,
