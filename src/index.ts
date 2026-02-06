@@ -3257,6 +3257,9 @@ export class KakaoForgeClient extends EventEmitter {
     ) || this._activeChatId || 0;
     if (!roomIdValue) return null;
 
+    const coverType = messageJson?.coverType ? String(messageJson.coverType) : '';
+    const inferredOpenChat = coverType.toLowerCase().includes('openchat');
+
     let logIdValue = normalizeLogTarget(body) || normalizeLogTarget(chatLog);
     if (messageJson && typeof messageJson === 'object') {
       const targetLogId = normalizeIdValue(
@@ -3283,6 +3286,12 @@ export class KakaoForgeClient extends EventEmitter {
           openLinkId: prev.openLinkId || openLinkIdValue,
           isOpenChat: prev.isOpenChat === undefined ? true : prev.isOpenChat,
         });
+      }
+    } else if (inferredOpenChat) {
+      const key = String(roomIdValue);
+      const prev = this._chatRooms.get(key) || {};
+      if (prev.isOpenChat !== true) {
+        this._chatRooms.set(key, { ...prev, isOpenChat: true });
       }
     }
 
@@ -3325,8 +3334,8 @@ export class KakaoForgeClient extends EventEmitter {
     if (!roomBase.name) {
       const roomKey = String(roomIdValue);
       const roomInfo = this._chatRooms.get(roomKey) || {};
-      const flags = resolveRoomFlags({ ...roomInfo, ...body, ...chatLog });
-      if (flags.isOpenChat) {
+      const flags = resolveRoomFlags({ ...roomInfo, ...body, ...chatLog, isOpenChat: inferredOpenChat || roomInfo.isOpenChat });
+      if (flags.isOpenChat || inferredOpenChat) {
         await this._ensureOpenChatInfo(roomIdValue, actorIdValue || undefined);
         let linkIdToUse = openLinkIdValue;
         if (!linkIdToUse) {
