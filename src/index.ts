@@ -3352,6 +3352,34 @@ export class KakaoForgeClient extends EventEmitter {
       }
       roomBase = this._buildRoomPayload(roomIdValue);
     }
+    if (roomBase.isOpenChat || inferredOpenChat) {
+      const derived = this._buildRoomNameFromMembers(String(roomIdValue));
+      const isDerived = derived && roomBase.name === derived;
+      if (!roomBase.name || isDerived) {
+        const roomKey = String(roomIdValue);
+        let linkIdToUse = openLinkIdValue;
+        if (!linkIdToUse) {
+          const refreshed = this._chatRooms.get(roomKey) || {};
+          linkIdToUse = normalizeIdValue(
+            refreshed.openLinkId || refreshed.openChatId || refreshed.li || 0
+          );
+        }
+        if (linkIdToUse && linkIdToUse !== 0 && linkIdToUse !== '0') {
+          const openName = await this._ensureOpenLinkName(linkIdToUse);
+          if (openName) {
+            const prev = this._chatRooms.get(roomKey) || {};
+            this._chatRooms.set(roomKey, {
+              ...prev,
+              title: openName,
+              roomName: openName,
+              isOpenChat: true,
+              openLinkId: prev.openLinkId || linkIdToUse,
+            });
+            roomBase = this._buildRoomPayload(roomIdValue);
+          }
+        }
+      }
+    }
     let room = roomBase;
     if (openLinkIdValue && !roomBase.openLinkId) {
       room = { ...roomBase, openLinkId: openLinkIdValue };
