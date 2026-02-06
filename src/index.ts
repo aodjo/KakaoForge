@@ -79,7 +79,12 @@ export type MemberEvent = {
 export type DeleteEvent = {
   type: 'delete';
   room: MessageEvent['room'];
-  actor?: MessageEvent['sender'];
+  actor: MessageEvent['sender'];
+  member: {
+    ids: Array<number | string>;
+    names: string[];
+  };
+  members: MessageEvent['sender'][];
   message: {
     id: number | string;
     logId: number | string;
@@ -1259,6 +1264,7 @@ const MENTION_MARK_MID = '\u0003';
 const MENTION_MARK_END = '\u0004';
 const SPOILER_MARK_START = '\u0005';
 const SPOILER_MARK_END = '\u0006';
+const MESSAGE_SENDER_CACHE_LIMIT = 200;
 
 function buildMentionMarker(userId: number | string, name: string) {
   const safeName = String(name || '')
@@ -2157,6 +2163,7 @@ export class KakaoForgeClient extends EventEmitter {
   _memberFetchInFlight: Map<string, Promise<void>>;
   _memberListFetchInFlight: Map<string, Promise<void>>;
   _memberCacheUpdatedAt: Map<string, number>;
+  _messageSenderCache: Map<string, Map<string, MessageEvent['sender']>>;
   _memberRefreshTimer: NodeJS.Timeout | null;
   _messageChains: Map<string, Promise<void>>;
   _activeChatId: number | string | null;
@@ -2263,6 +2270,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._memberFetchInFlight = new Map();
     this._memberListFetchInFlight = new Map();
     this._memberCacheUpdatedAt = new Map();
+    this._messageSenderCache = new Map();
     this._memberRefreshTimer = null;
     this._messageChains = new Map();
     this._activeChatId = null;
@@ -3451,8 +3459,35 @@ export class KakaoForgeClient extends EventEmitter {
 
       return hideEvent;
     }
+    const deleteEvent: DeleteEvent = {
+      ...(base as DeleteEvent),
+      actor,
+      member: { ids: [0], names: [''] },
+      members: [this._buildMemberRef(roomIdValue, 0, '')],
+    };
 
-    return base as DeleteEvent;
+    let memberRef = this._getCachedMessageSender(roomIdValue, logIdValue);
+    if (!memberRef) {
+      const authorIdValue = normalizeIdValue(
+        body.authorId ||
+          body.userId ||
+          body.memberId ||
+          body.uid ||
+          chatLog?.authorId ||
+          chatLog?.userId ||
+          0
+      );
+      if (authorIdValue) {
+        const name = this._getCachedMemberName(roomIdValue, authorIdValue) || '';
+        memberRef = this._buildMemberRef(roomIdValue, authorIdValue, name);
+      }
+    }
+    if (memberRef) {
+      deleteEvent.member = { ids: [memberRef.id], names: [memberRef.name] };
+      deleteEvent.members = [memberRef];
+    }
+
+    return deleteEvent;
   }
 
   _buildMemberEvent(
@@ -3773,6 +3808,10 @@ export class KakaoForgeClient extends EventEmitter {
       type,
       logId: logIdValue,
     };
+
+    if (roomIdValue && logIdValue) {
+      this._cacheMessageSender(roomIdValue, logIdValue, msg.sender);
+    }
 
     if (roomIdValue) {
       const key = String(roomIdValue);
@@ -4124,6 +4163,37 @@ export class KakaoForgeClient extends EventEmitter {
         this._chatRooms.set(key, { ...room, roomName: derived });
       }
     }
+  }
+
+  _cacheMessageSender(chatId: number | string, logId: number | string, sender: MessageEvent['sender']) {
+    if (!chatId || !logId || !sender) return;
+    const logKey = String(normalizeIdValue(logId));
+    if (!logKey || logKey === '0') return;
+    const chatKey = String(chatId);
+    let map = this._messageSenderCache.get(chatKey);
+    if (!map) {
+      map = new Map();
+      this._messageSenderCache.set(chatKey, map);
+    }
+    if (map.has(logKey)) {
+      map.delete(logKey);
+    }
+    map.set(logKey, { id: sender.id, name: sender.name, type: sender.type });
+    while (map.size > MESSAGE_SENDER_CACHE_LIMIT) {
+      const firstKey = map.keys().next().value;
+      if (firstKey === undefined) break;
+      map.delete(firstKey);
+    }
+  }
+
+  _getCachedMessageSender(chatId: number | string, logId: number | string): MessageEvent['sender'] | null {
+    if (!chatId || !logId) return null;
+    const logKey = String(normalizeIdValue(logId));
+    if (!logKey || logKey === '0') return null;
+    const map = this._messageSenderCache.get(String(chatId));
+    if (!map) return null;
+    const cached = map.get(logKey);
+    return cached || null;
   }
 
   _applyMemberTypePush(packet: any) {
