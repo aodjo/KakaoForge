@@ -93,12 +93,12 @@ export type DeleteEvent = {
 export type HideEvent = {
   type: 'hide';
   room: MessageEvent['room'];
-  actor?: MessageEvent['sender'];
-  member?: {
+  actor: MessageEvent['sender'];
+  member: {
     ids: Array<number | string>;
     names: string[];
   };
-  members?: MessageEvent['sender'][];
+  members: MessageEvent['sender'][];
   message: {
     id: number | string;
     logId: number | string;
@@ -3302,18 +3302,16 @@ export class KakaoForgeClient extends EventEmitter {
         chatLog?.userId ||
         0
     );
-    let actor: MessageEvent['sender'] | undefined;
-    if (actorIdValue) {
-      const rawName =
-        body.memberName ||
-        body.nickName ||
-        body.nickname ||
-        body.name ||
-        body.actorName ||
-        '';
-      const name = rawName || this._getCachedMemberName(roomIdValue, actorIdValue) || String(actorIdValue);
-      actor = { id: actorIdValue, name, type: this._resolveMemberType(roomIdValue, actorIdValue) };
-    }
+    const rawActorName =
+      body.memberName ||
+      body.nickName ||
+      body.nickname ||
+      body.name ||
+      body.actorName ||
+      '';
+    const actorName =
+      rawActorName || this._getCachedMemberName(roomIdValue, actorIdValue) || (actorIdValue ? String(actorIdValue) : '');
+    const actor = this._buildMemberRef(roomIdValue, actorIdValue || 0, actorName);
 
     const base = {
       type,
@@ -3350,6 +3348,9 @@ export class KakaoForgeClient extends EventEmitter {
             : undefined;
       const hideEvent: HideEvent = {
         ...(base as HideEvent),
+        actor,
+        member: { ids: [0], names: [''] },
+        members: [this._buildMemberRef(roomIdValue, 0, '')],
         category: categoryRaw ? String(categoryRaw) : undefined,
         report,
         hidden: typeof messageJson?.hidden === 'boolean' ? messageJson.hidden : undefined,
