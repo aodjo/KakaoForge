@@ -1692,7 +1692,7 @@ const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
   KICK: 'kick',
 };
 
-const PUSH_DELETE_ACTIONS = new Set(['DELETEMSG', 'DELMSG', 'DELM', 'DELMESSAGE', 'MSGDEL']);
+const PUSH_DELETE_ACTIONS = new Set(['DELETEMSG', 'DELMSG', 'DELM', 'DELMESSAGE', 'MSGDEL', 'SYNCDLMSG']);
 const PUSH_HIDE_ACTIONS = new Set(['BLIND', 'BLINDMSG', 'HIDEMSG', 'HIDE', 'SYNCREWR']);
 
 const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
