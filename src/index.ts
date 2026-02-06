@@ -94,6 +94,11 @@ export type HideEvent = {
   type: 'hide';
   room: MessageEvent['room'];
   actor?: MessageEvent['sender'];
+  member?: {
+    ids: Array<number | string>;
+    names: string[];
+  };
+  members?: MessageEvent['sender'][];
   message: {
     id: number | string;
     logId: number | string;
@@ -2851,12 +2856,12 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
-    const deleteHandled = this._emitDeleteEventFromPush(packet);
+    const deleteHandled = await this._emitDeleteEventFromPush(packet);
     if (deleteHandled) {
       return;
     }
 
-    const hideHandled = this._emitHideEventFromPush(packet);
+    const hideHandled = await this._emitHideEventFromPush(packet);
     if (hideHandled) {
       return;
     }
@@ -3207,23 +3212,23 @@ export class KakaoForgeClient extends EventEmitter {
     return true;
   }
 
-  _emitDeleteEventFromPush(packet: any): boolean {
+  async _emitDeleteEventFromPush(packet: any): Promise<boolean> {
     if (!resolveDeleteActionFromPush(packet?.method)) return false;
-    const event = this._buildModerationEventFromPush('delete', packet);
+    const event = await this._buildModerationEventFromPush('delete', packet);
     if (!event || event.type !== 'delete') return false;
     this._emitDeleteEvent(event);
     return true;
   }
 
-  _emitHideEventFromPush(packet: any): boolean {
+  async _emitHideEventFromPush(packet: any): Promise<boolean> {
     if (!resolveHideActionFromPush(packet?.method)) return false;
-    const event = this._buildModerationEventFromPush('hide', packet);
+    const event = await this._buildModerationEventFromPush('hide', packet);
     if (!event || event.type !== 'hide') return false;
     this._emitHideEvent(event);
     return true;
   }
 
-  _buildModerationEventFromPush(type: 'delete' | 'hide', packet: any): DeleteEvent | HideEvent | null {
+  async _buildModerationEventFromPush(type: 'delete' | 'hide', packet: any): Promise<DeleteEvent | HideEvent | null> {
     const body = packet?.body || {};
     const chatLog = extractChatLogPayload(body.chatLog || body.chatlog || body);
     const attachmentRaw =
@@ -3343,7 +3348,7 @@ export class KakaoForgeClient extends EventEmitter {
           : reportRaw !== undefined
             ? !!safeNumber(reportRaw, 0)
             : undefined;
-      return {
+      const hideEvent: HideEvent = {
         ...(base as HideEvent),
         category: categoryRaw ? String(categoryRaw) : undefined,
         report,
@@ -3351,6 +3356,27 @@ export class KakaoForgeClient extends EventEmitter {
         coverType: messageJson?.coverType ? String(messageJson.coverType) : undefined,
         feedType: typeof messageJson?.feedType === 'number' ? messageJson.feedType : undefined,
       };
+
+      if (logIdValue && roomIdValue) {
+        try {
+          const targetMsg = await this.fetchMessage(roomIdValue, logIdValue);
+          const targetSender = targetMsg?.sender;
+          if (targetSender?.id) {
+            const ref = this._buildMemberRef(roomIdValue, targetSender.id, targetSender.name);
+            hideEvent.member = { ids: [ref.id], names: [ref.name] };
+            hideEvent.members = [ref];
+          }
+        } catch (err) {
+          if (this.debug) {
+            console.error(
+              '[DBG] hide fetchMessage failed:',
+              err instanceof Error ? err.message : String(err)
+            );
+          }
+        }
+      }
+
+      return hideEvent;
     }
 
     return base as DeleteEvent;
