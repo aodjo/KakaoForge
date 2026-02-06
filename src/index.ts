@@ -76,6 +76,36 @@ export type MemberEvent = {
   raw: any;
 };
 
+export type DeleteEvent = {
+  type: 'delete';
+  room: MessageEvent['room'];
+  actor?: MessageEvent['sender'];
+  message: {
+    id: number | string;
+    logId: number | string;
+  };
+  raw: any;
+  // Legacy aliases for compatibility
+  chatId: number | string;
+  logId: number | string;
+};
+
+export type HideEvent = {
+  type: 'hide';
+  room: MessageEvent['room'];
+  actor?: MessageEvent['sender'];
+  message: {
+    id: number | string;
+    logId: number | string;
+  };
+  category?: string;
+  report?: boolean;
+  raw: any;
+  // Legacy aliases for compatibility
+  chatId: number | string;
+  logId: number | string;
+};
+
 export { MemberType } from './types/member-type';
 export type { MemberTypeValue } from './types/member-type';
 export type MemberType = MemberTypeValue;
@@ -400,6 +430,8 @@ type ChatListCursor = {
 
 type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
 type MemberEventHandler = ((chat: ChatModule, evt: MemberEvent) => void) | ((evt: MemberEvent) => void);
+type DeleteEventHandler = ((chat: ChatModule, evt: DeleteEvent) => void) | ((evt: DeleteEvent) => void);
+type HideEventHandler = ((chat: ChatModule, evt: HideEvent) => void) | ((evt: HideEvent) => void);
 
 type MemberNameCache = Map<string, Map<string, string>>;
 
@@ -1652,6 +1684,9 @@ const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
   KICK: 'kick',
 };
 
+const PUSH_DELETE_ACTIONS = new Set(['DELETEMSG', 'DELMSG', 'DELM', 'DELMESSAGE', 'MSGDEL']);
+const PUSH_HIDE_ACTIONS = new Set(['BLIND', 'BLINDMSG', 'HIDEMSG', 'HIDE']);
+
 const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
   4: 'join',
   6: 'kick',
@@ -1659,6 +1694,16 @@ const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
 
 function resolveMemberActionFromPush(method: string): MemberAction | null {
   return PUSH_MEMBER_ACTIONS[method] || null;
+}
+
+function resolveDeleteActionFromPush(method: string): boolean {
+  const key = String(method || '').toUpperCase();
+  return PUSH_DELETE_ACTIONS.has(key);
+}
+
+function resolveHideActionFromPush(method: string): boolean {
+  const key = String(method || '').toUpperCase();
+  return PUSH_HIDE_ACTIONS.has(key);
 }
 
 function normalizeMemberAction(value: any): MemberAction | null {
@@ -2085,6 +2130,8 @@ export class KakaoForgeClient extends EventEmitter {
   _leaveHandler: MemberEventHandler | null;
   _inviteHandler: MemberEventHandler | null;
   _kickHandler: MemberEventHandler | null;
+  _deleteHandler: DeleteEventHandler | null;
+  _hideHandler: HideEventHandler | null;
   _pushHandlers: Map<string, (payload: any) => void>;
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
@@ -2189,6 +2236,8 @@ export class KakaoForgeClient extends EventEmitter {
     this._leaveHandler = null;
     this._inviteHandler = null;
     this._kickHandler = null;
+    this._deleteHandler = null;
+    this._hideHandler = null;
     this._pushHandlers = new Map();
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
@@ -2799,6 +2848,16 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
 
+    const deleteHandled = this._emitDeleteEventFromPush(packet);
+    if (deleteHandled) {
+      return;
+    }
+
+    const hideHandled = this._emitHideEventFromPush(packet);
+    if (hideHandled) {
+      return;
+    }
+
     if (packet.method === 'MSG') {
       const { chatId, chatLog } = packet.body || {};
       if (chatLog) {
@@ -2840,6 +2899,14 @@ export class KakaoForgeClient extends EventEmitter {
 
   onKick(handler: MemberEventHandler) {
     this._kickHandler = handler;
+  }
+
+  onDelete(handler: DeleteEventHandler) {
+    this._deleteHandler = handler;
+  }
+
+  onHide(handler: HideEventHandler) {
+    this._hideHandler = handler;
   }
 
   onReady(handler: (chat: ChatModule) => void) {
@@ -2916,6 +2983,30 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
     this.emit(action, this.chat, event);
+  }
+
+  _emitDeleteEvent(event: DeleteEvent) {
+    const handler = this._deleteHandler;
+    if (handler) {
+      if (handler.length <= 1) {
+        (handler as (evt: DeleteEvent) => void)(event);
+      } else {
+        (handler as (chat: ChatModule, evt: DeleteEvent) => void)(this.chat, event);
+      }
+    }
+    this.emit('delete', this.chat, event);
+  }
+
+  _emitHideEvent(event: HideEvent) {
+    const handler = this._hideHandler;
+    if (handler) {
+      if (handler.length <= 1) {
+        (handler as (evt: HideEvent) => void)(event);
+      } else {
+        (handler as (chat: ChatModule, evt: HideEvent) => void)(this.chat, event);
+      }
+    }
+    this.emit('hide', this.chat, event);
   }
 
   _emitMemberEventsFromMessage(msg: MessageEvent, raw: any) {
@@ -3111,6 +3202,106 @@ export class KakaoForgeClient extends EventEmitter {
     });
     this._emitMemberEvent(resolvedAction, event);
     return true;
+  }
+
+  _emitDeleteEventFromPush(packet: any): boolean {
+    if (!resolveDeleteActionFromPush(packet?.method)) return false;
+    const event = this._buildModerationEventFromPush('delete', packet);
+    if (!event || event.type !== 'delete') return false;
+    this._emitDeleteEvent(event);
+    return true;
+  }
+
+  _emitHideEventFromPush(packet: any): boolean {
+    if (!resolveHideActionFromPush(packet?.method)) return false;
+    const event = this._buildModerationEventFromPush('hide', packet);
+    if (!event || event.type !== 'hide') return false;
+    this._emitHideEvent(event);
+    return true;
+  }
+
+  _buildModerationEventFromPush(type: 'delete' | 'hide', packet: any): DeleteEvent | HideEvent | null {
+    const body = packet?.body || {};
+    const chatLog = extractChatLogPayload(body.chatLog || body.chatlog || body);
+    const roomIdValue = normalizeIdValue(
+      body.chatId || body.c || body.roomId || body.chatRoomId || chatLog?.chatId || chatLog?.c || 0
+    ) || this._activeChatId || 0;
+    if (!roomIdValue) return null;
+
+    const logIdValue = normalizeLogTarget(body) || normalizeLogTarget(chatLog);
+    if (!logIdValue) return null;
+
+    const openLinkIdValue = normalizeIdValue(
+      extractOpenLinkIdFromRaw(body) || extractOpenLinkIdFromRaw(chatLog) || 0
+    );
+    if (openLinkIdValue && openLinkIdValue !== 0 && openLinkIdValue !== '0') {
+      const key = String(roomIdValue);
+      const prev = this._chatRooms.get(key) || {};
+      if (!prev.openLinkId || prev.isOpenChat !== true) {
+        this._chatRooms.set(key, {
+          ...prev,
+          openLinkId: prev.openLinkId || openLinkIdValue,
+          isOpenChat: prev.isOpenChat === undefined ? true : prev.isOpenChat,
+        });
+      }
+    }
+
+    const roomBase = this._buildRoomPayload(roomIdValue);
+    const room =
+      openLinkIdValue && !roomBase.openLinkId
+        ? { ...roomBase, openLinkId: openLinkIdValue }
+        : roomBase;
+
+    const actorIdValue = normalizeIdValue(
+      body.userId ||
+        body.actorId ||
+        body.authorId ||
+        body.aid ||
+        body.uid ||
+        chatLog?.authorId ||
+        chatLog?.userId ||
+        0
+    );
+    let actor: MessageEvent['sender'] | undefined;
+    if (actorIdValue) {
+      const rawName =
+        body.memberName ||
+        body.nickName ||
+        body.nickname ||
+        body.name ||
+        body.actorName ||
+        '';
+      const name = rawName || this._getCachedMemberName(roomIdValue, actorIdValue) || String(actorIdValue);
+      actor = { id: actorIdValue, name, type: this._resolveMemberType(roomIdValue, actorIdValue) };
+    }
+
+    const base = {
+      type,
+      room,
+      actor,
+      message: { id: logIdValue, logId: logIdValue },
+      raw: packet,
+      chatId: roomIdValue,
+      logId: logIdValue,
+    } as DeleteEvent | HideEvent;
+
+    if (type === 'hide') {
+      const categoryRaw = body.category || body.cat || body.reason || body.reportCategory;
+      const reportRaw = body.report ?? body.r ?? body.reported;
+      const report =
+        typeof reportRaw === 'boolean'
+          ? reportRaw
+          : reportRaw !== undefined
+            ? !!safeNumber(reportRaw, 0)
+            : undefined;
+      return {
+        ...(base as HideEvent),
+        category: categoryRaw ? String(categoryRaw) : undefined,
+        report,
+      };
+    }
+
+    return base as DeleteEvent;
   }
 
   _buildMemberEvent(
