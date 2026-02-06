@@ -100,6 +100,9 @@ export type HideEvent = {
   };
   category?: string;
   report?: boolean;
+  hidden?: boolean;
+  coverType?: string;
+  feedType?: number;
   raw: any;
   // Legacy aliases for compatibility
   chatId: number | string;
@@ -3232,12 +3235,35 @@ export class KakaoForgeClient extends EventEmitter {
       body?.extra ??
       null;
     const attachmentJson = parseAttachmentJson(attachmentRaw);
+    const messageRaw = chatLog?.message ?? chatLog?.msg ?? chatLog?.text ?? null;
+    let messageJson: any = null;
+    if (typeof messageRaw === 'string') {
+      const trimmed = messageRaw.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          messageJson = LosslessJSON.parse(trimmed);
+        } catch {
+          messageJson = null;
+        }
+      }
+    }
     const roomIdValue = normalizeIdValue(
       body.chatId || body.c || body.roomId || body.chatRoomId || chatLog?.chatId || chatLog?.c || 0
     ) || this._activeChatId || 0;
     if (!roomIdValue) return null;
 
-    const logIdValue = normalizeLogTarget(body) || normalizeLogTarget(chatLog);
+    let logIdValue = normalizeLogTarget(body) || normalizeLogTarget(chatLog);
+    if (messageJson && typeof messageJson === 'object') {
+      const targetLogId = normalizeIdValue(
+        messageJson.logId ||
+          (Array.isArray(messageJson.chatLogInfos) && messageJson.chatLogInfos[0]
+            ? messageJson.chatLogInfos[0].logId || messageJson.chatLogInfos[0].l
+            : 0)
+      );
+      if (targetLogId) {
+        logIdValue = targetLogId;
+      }
+    }
     if (!logIdValue) return null;
 
     const openLinkIdValue = normalizeIdValue(
@@ -3321,6 +3347,9 @@ export class KakaoForgeClient extends EventEmitter {
         ...(base as HideEvent),
         category: categoryRaw ? String(categoryRaw) : undefined,
         report,
+        hidden: typeof messageJson?.hidden === 'boolean' ? messageJson.hidden : undefined,
+        coverType: messageJson?.coverType ? String(messageJson.coverType) : undefined,
+        feedType: typeof messageJson?.feedType === 'number' ? messageJson.feedType : undefined,
       };
     }
 
