@@ -10,7 +10,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "strict": false
+    "strict": false,
+    "removeComments": true
   },
   "include": [
     "src/**/*.ts"
