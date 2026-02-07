@@ -379,7 +379,7 @@ export type AuthPayload = {
 
 function loadAuthFile(authPath: string): AuthFile {
   if (!fs.existsSync(authPath)) {
-    throw new Error(`auth.json not found at ${authPath}. Run: node cli/qr.js or createAuthByQR()`);
+    throw new Error(`auth.json not found at ${authPath}. Run createAuthByQR() first.`);
   }
   const raw = fs.readFileSync(authPath, 'utf-8');
   try {
