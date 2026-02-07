@@ -1,16 +1,28 @@
-MIT License
+﻿KakaoForge Non-Commercial / No Abuse License
 
 Copyright (c) 2026 aodjo (https://junx.dev/)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, and distribute the Software for non-commercial purposes only,
+subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Non-Commercial Use Only
+   - Commercial use is prohibited. "Commercial use" means any use by or on
+     behalf of a commercial entity, any use primarily intended for commercial
+     advantage or monetary compensation, or offering the Software as a service.
+
+2. No Abuse / Harmful Use
+   - You may not use the Software for abusive or harmful purposes, including
+     spam, harassment, phishing, credential theft, or unauthorized access.
+
+3. Attribution
+   - This license notice must be included in all copies or substantial
+     portions of the Software.
+
+4. Termination
+   - Any violation of this license terminates your rights to use the Software
+     immediately.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
