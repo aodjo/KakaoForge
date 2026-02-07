@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:watch": "tsc -p tsconfig.json --watch",
+    "deploy": "npm run build && npm version patch && npm publish --access public",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
