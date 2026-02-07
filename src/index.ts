@@ -22,6 +22,7 @@ import {
   buildAHeader,
   httpsGet,
   KATALK_HOST,
+  DEFAULT_QR_MODEL_NAME,
 } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
 import { MessageType, type MessageTypeValue } from './types/message';
@@ -1119,6 +1120,53 @@ function previewLossless(obj: unknown, maxLen = 800) {
     return `${text.slice(0, maxLen)}...`;
   }
   return text;
+}
+
+function buildQrLoginHandlers() {
+  let qrcode: any = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    qrcode = require('qrcode-terminal');
+  } catch {
+    qrcode = null;
+  }
+
+  const onQrUrl = (url: string) => {
+    console.log('\n[QR] Scan this code in KakaoTalk > Settings > QR Login.\n');
+    if (qrcode && typeof qrcode.generate === 'function') {
+      qrcode.generate(url, { small: true }, (qr: string) => {
+        console.log(qr);
+      });
+    }
+    console.log(`  ${url}\n`);
+  };
+
+  const onPasscode = (passcode: string) => {
+    if (!passcode) return;
+    const digits = String(passcode).split('');
+    const big: Record<string, string[]> = {
+      '0': [' 000 ', '0   0', '0   0', '0   0', ' 000 '],
+      '1': ['  1  ', ' 11  ', '  1  ', '  1  ', ' 111 '],
+      '2': [' 222 ', '2   2', '  2  ', ' 2   ', '22222'],
+      '3': ['3333 ', '    3', ' 333 ', '    3', '3333 '],
+      '4': ['4   4', '4   4', '44444', '    4', '    4'],
+      '5': ['55555', '5    ', '5555 ', '    5', '5555 '],
+      '6': [' 666 ', '6    ', '6666 ', '6   6', ' 666 '],
+      '7': ['77777', '   7 ', '  7  ', ' 7   ', ' 7   '],
+      '8': [' 888 ', '8   8', ' 888 ', '8   8', ' 888 '],
+      '9': [' 999 ', '9   9', ' 9999', '    9', ' 999 '],
+    };
+
+    process.stdout.write('\x1B[2J\x1B[H');
+    console.log('\n[QR] Passcode:\n');
+    for (let row = 0; row < 5; row += 1) {
+      const line = digits.map((d) => (big[d] ? big[d][row] : '     ')).join('   ');
+      console.log('      ' + line);
+    }
+    console.log('\nEnter this passcode on your phone.\n');
+  };
+
+  return { onQrUrl, onPasscode };
 }
 
 function buildExtra(attachment?: AttachmentInput, extra?: string) {
@@ -2563,18 +2611,39 @@ export class KakaoForgeClient extends EventEmitter {
       console.log(`[*] Generated device UUID: ${this.deviceUuid.substring(0, 16)}...`);
     }
 
+    let resolvedDeviceName = deviceName;
+    let resolvedModelName = modelName;
+    if (!resolvedDeviceName) {
+      resolvedDeviceName = DEFAULT_QR_MODEL_NAME;
+    }
+    if (!resolvedModelName) {
+      resolvedModelName = DEFAULT_QR_MODEL_NAME;
+    }
+
+    let resolvedOnQrUrl = onQrUrl;
+    let resolvedOnPasscode = onPasscode;
+    if (!resolvedOnQrUrl || !resolvedOnPasscode) {
+      const defaults = buildQrLoginHandlers();
+      if (!resolvedOnQrUrl) {
+        resolvedOnQrUrl = defaults.onQrUrl;
+      }
+      if (!resolvedOnPasscode) {
+        resolvedOnPasscode = defaults.onPasscode;
+      }
+    }
+
     // Step 1: QR code login to get OAuth token
     console.log('[*] Starting QR code login...');
     const loginResult = await qrLogin({
       deviceUuid: this.deviceUuid,
-      deviceName,
-      modelName,
+      deviceName: resolvedDeviceName,
+      modelName: resolvedModelName,
       forced,
       appVer: this.appVer,
       checkAllowlist,
       enforceAllowlist,
-      onQrUrl,
-      onPasscode,
+      onQrUrl: resolvedOnQrUrl,
+      onPasscode: resolvedOnPasscode,
     });
 
     this.userId = loginResult.userId;
