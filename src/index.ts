@@ -373,6 +373,7 @@ export type AuthPayload = {
   refreshToken?: string;
   deviceUuid: string;
   savedAt?: string;
+  authPath?: string;
   raw?: any;
 };
 
@@ -6141,6 +6142,8 @@ export async function createAuthByQR({
   if (save !== false) {
     const targetPath = authPath || path.join(process.cwd(), 'auth.json');
     fs.writeFileSync(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+    payload.authPath = targetPath;
+    console.log(`[+] Saved auth.json at ${targetPath}`);
   }
 
   return payload;
