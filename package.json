@@ -1,5 +1,5 @@
 {
-  "name": "@aodjo/kakaoforge",
+  "name": "kakaoforge",
   "version": "1.0.0",
   "description": "",
   "main": "dist/index.js",
@@ -7,9 +7,6 @@
   "files": [
     "dist"
   ],
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:watch": "tsc -p tsconfig.json --watch",
