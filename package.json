@@ -22,7 +22,7 @@
   "bugs": {
     "url": "https://github.com/aodjo/KakaoForge/issues"
   },
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "bson": "^7.1.1",
