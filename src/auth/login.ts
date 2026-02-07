@@ -7,14 +7,11 @@ import { generateXVCHeader } from './crypto';
 export const KATALK_HOST = 'katalk.kakao.com';
 export const AUTH_HOST = 'auth.kakao.com';
 
-// Default Android KakaoTalk-like values
 export const DEFAULT_APP_VER = '26.1.2';
 const DEFAULT_OS_VER = '14';
 const DEFAULT_DEVICE_NAME = 'KakaoForge';
 const DEFAULT_MODEL_NAME = 'SM-G998N';
-// QR 로그인은 태블릿 모델만 허용 (allowlist.json 기준)
-export const DEFAULT_QR_MODEL_NAME = 'SM-T733';
-// QR 서비스는 별도 OkHttpClient 사용 → User-Agent가 다름
+export const DEFAULT_QR_MODEL_NAME = 'SM-T733';  // allowlist.json 기준
 const QR_USER_AGENT = 'okhttp/4.12.0';
 
 /**
