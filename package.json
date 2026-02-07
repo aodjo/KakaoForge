@@ -14,6 +14,14 @@
   },
   "keywords": [],
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aodjo/KakaoForge.git"
+  },
+  "homepage": "https://github.com/aodjo/KakaoForge#readme",
+  "bugs": {
+    "url": "https://github.com/aodjo/KakaoForge/issues"
+  },
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
