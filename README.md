@@ -1,4 +1,19 @@
-﻿# KakaoForge
+<div align="center">
+
+[![Libaray](https://img.shields.io/badge/Node.js-Library-339933?logo=node.js&logoColor=white)](https://www.npmjs.com/package/kakaoforge)
+[![License](https://img.shields.io/badge/License-Custom-informational)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/commits/main)
+[![Commits](https://img.shields.io/github/commit-activity/m/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/commits/main)
+[![npm version](https://img.shields.io/npm/v/kakaoforge?cache=no)](https://www.npmjs.com/package/kakaoforge)
+[![npm downloads](https://img.shields.io/npm/dm/kakaoforge?cache=no)](https://www.npmjs.com/package/kakaoforge)
+[![TypeScript](https://img.shields.io/badge/TypeScript-Supported-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Issues](https://img.shields.io/github/issues/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/issues)
+[![Pull Requests](https://img.shields.io/github/issues-pr/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/pulls)
+
+</div>
+
+
+# KakaoForge
 
 카카오톡 LOCO 프로토콜 기반 Node.js 봇 라이브러리
 
