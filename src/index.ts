@@ -367,9 +367,18 @@ type AuthFile = {
   savedAt?: string;
 };
 
+export type AuthPayload = {
+  userId: number | string;
+  accessToken: string;
+  refreshToken?: string;
+  deviceUuid: string;
+  savedAt?: string;
+  raw?: any;
+};
+
 function loadAuthFile(authPath: string): AuthFile {
   if (!fs.existsSync(authPath)) {
-    throw new Error(`auth.json not found at ${authPath}. Run: node cli/qr.js or node cli/login.js`);
+    throw new Error(`auth.json not found at ${authPath}. Run: node cli/qr.js or createAuthByQR()`);
   }
   const raw = fs.readFileSync(authPath, 'utf-8');
   try {
@@ -1120,6 +1129,11 @@ function previewLossless(obj: unknown, maxLen = 800) {
     return `${text.slice(0, maxLen)}...`;
   }
   return text;
+}
+
+function formatKstTimestamp(date = new Date()) {
+  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().replace('Z', '+09:00');
 }
 
 function buildQrLoginHandlers() {
@@ -6082,6 +6096,54 @@ export function createClient(config: KakaoForgeConfig = {}) {
     });
   }
   return client;
+}
+
+export async function createAuthByQR({
+  authPath,
+  deviceUuid,
+  deviceName,
+  modelName,
+  forced = false,
+  checkAllowlist,
+  enforceAllowlist,
+  appVer,
+  onQrUrl,
+  onPasscode,
+  save = true,
+}: any = {}): Promise<AuthPayload> {
+  const resolvedDeviceName = deviceName || DEFAULT_QR_MODEL_NAME;
+  const resolvedModelName = modelName || DEFAULT_QR_MODEL_NAME;
+  const handlers = buildQrLoginHandlers();
+  const resolvedOnQrUrl = onQrUrl || handlers.onQrUrl;
+  const resolvedOnPasscode = onPasscode || handlers.onPasscode;
+
+  const loginResult = await qrLogin({
+    deviceUuid,
+    deviceName: resolvedDeviceName,
+    modelName: resolvedModelName,
+    forced,
+    appVer,
+    checkAllowlist,
+    enforceAllowlist,
+    onQrUrl: resolvedOnQrUrl,
+    onPasscode: resolvedOnPasscode,
+  });
+
+  const payload: AuthPayload = {
+    userId: loginResult.userId,
+    accessToken: loginResult.accessToken,
+    refreshToken: loginResult.refreshToken || '',
+    deviceUuid: loginResult.deviceUuid || deviceUuid || '',
+    savedAt: formatKstTimestamp(),
+    raw: loginResult.raw,
+  };
+
+  if (save !== false) {
+    const targetPath = authPath || path.join(process.cwd(), 'auth.json');
+    fs.writeFileSync(targetPath, JSON.stringify(payload, null, 2), 'utf-8');
+  }
+
+  return payload;
 }
 
 export function Mention(userId: number | string, nameOrChatId?: string | number, chatId?: number | string) {
