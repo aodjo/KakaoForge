@@ -2278,7 +2278,7 @@ export class KakaoForgeClient extends EventEmitter {
     this.type = 0;
 
     this.autoReconnect = config.autoReconnect !== false;
-    this.sendIntervalMs = 300;
+    this.sendIntervalMs = 400;
     if (typeof config.sendIntervalMs === 'number') {
       this.sendIntervalMs = config.sendIntervalMs;
     }
