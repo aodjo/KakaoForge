@@ -1,5 +1,5 @@
 import { toLong, safeNumber, isBlankText, truncateChatLogMessage, stringifyLossless, normalizeIdValue } from './helpers';
-import { CarriageClient } from '../net/carriage-client';
+import type { CarriageClient } from '../net/carriage-client';
 
 export function parseAttachments(raw: any): any[] {
   if (raw === undefined || raw === null) return [];
