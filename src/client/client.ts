@@ -346,6 +346,11 @@ export class KakaoForgeClient extends EventEmitter {
       const aliasKey = `${chatKey}:${approx}`;
       const aliased = this._logIdAliases.get(aliasKey);
       if (aliased) return aliased;
+      // If the unsafe integer's string representation is a plain digit string,
+      // treat that as the normalized logId instead of forcing callers to pass a string.
+      if (/^\d+$/.test(approx)) {
+        return approx;
+      }
       throw new Error('logId exceeds Number.MAX_SAFE_INTEGER. Pass logId as string.');
     }
     const normalized = normalizeIdValue(logId);
