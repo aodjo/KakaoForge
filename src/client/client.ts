@@ -325,28 +325,33 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   _recordLogAlias(logIdValue: number | string) {
+  _recordLogAlias(chatId: number | string, logIdValue: number | string) {
     const idStr = typeof logIdValue === 'string' ? logIdValue : String(logIdValue);
     if (!/^\d+$/.test(idStr)) return;
     if (idStr.length < 16) return;
     const approx = safeNumber(idStr, 0);
     if (!approx) return;
     const approxStr = String(approx);
+    const chatKey = String(normalizeIdValue(chatId));
+    const aliasKey = `${chatKey}:${approxStr}`;
     if (approxStr !== idStr) {
-      this._logIdAliases.set(approxStr, idStr);
+      this._logIdAliases.set(aliasKey, idStr);
     }
   }
 
-  _resolveLogId(logId: number | string) {
+  _resolveLogId(chatId: number | string, logId: number | string) {
+    const chatKey = String(normalizeIdValue(chatId));
     if (typeof logId === 'number' && !Number.isSafeInteger(logId)) {
       const approx = String(logId);
-      const aliased = this._logIdAliases.get(approx);
+      const aliasKey = `${chatKey}:${approx}`;
+      const aliased = this._logIdAliases.get(aliasKey);
       if (aliased) return aliased;
-      // Fallback to approximate string instead of throwing
-      return approx;
+      throw new Error('logId exceeds Number.MAX_SAFE_INTEGER. Pass logId as string.');
     }
     const normalized = normalizeIdValue(logId);
     const key = String(normalized);
-    return this._logIdAliases.get(key) || normalized;
+    const aliasKey = `${chatKey}:${key}`;
+    return this._logIdAliases.get(aliasKey) || normalized;
   }
 
   async _ensureChatInfo(chatId: number | string) {
