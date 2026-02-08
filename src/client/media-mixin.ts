@@ -337,9 +337,9 @@ async function _fetchProfileAttachment(this: KakaoForgeClient, userId: number | 
     candidates.push(`/android/profile3/friend_info.json?id=${encodeURIComponent(idStr)}`);
 
     let lastError: Error | null = null;
-    for (const path of candidates) {
+    for (const apiPath of candidates) {
       try {
-        const res = await httpsGet(KATALK_HOST, path, this._profileHeaders());
+        const res = await httpsGet(KATALK_HOST, apiPath, this._profileHeaders());
         if (res?.status && res.status >= 400) {
           lastError = new Error(`Profile lookup failed: status=${res.status}`);
           continue;
