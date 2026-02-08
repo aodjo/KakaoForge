@@ -237,7 +237,7 @@ async function _uploadContactVCard(this: KakaoForgeClient,
     chatId?: number | string
   ) {
     if (!contact || !contact.name) {
-      throw new Error('?곕씫泥??꾩넚?먮뒗 name???꾩슂?⑸땲??');
+      throw new Error("Contact 'name' is required to upload vCard.");
     }
 
     let filePath = contact.filePath || '';
