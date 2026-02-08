@@ -1,7 +1,7 @@
 <div align="center">
 
 [![Library](https://img.shields.io/badge/Node.js-Library-339933?logo=node.js&logoColor=white)](https://www.npmjs.com/package/kakaoforge)
-[![License](https://img.shields.io/badge/License-Custom-informational)](LICENSE)
+[![License](https://img.shields.io/badge/License-Custom-informational)](../LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/commits/main)
 [![Commits](https://img.shields.io/github/commit-activity/m/aodjo/KakaoForge)](https://github.com/aodjo/KakaoForge/commits/main)
 [![npm version](https://img.shields.io/npm/v/kakaoforge?cache=no)](https://www.npmjs.com/package/kakaoforge)
