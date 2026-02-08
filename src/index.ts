@@ -1,10 +1,8 @@
-import { EventEmitter } from 'events';
+﻿import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as crypto from 'crypto';
 import * as LosslessJSON from 'lossless-json';
-import { spawn, spawnSync } from 'child_process';
 import { Long } from 'bson';
 import { BookingClient } from './net/booking-client';
 import { CarriageClient } from './net/carriage-client';
@@ -27,6 +25,111 @@ import {
 import { nextClientMsgId } from './util/client-msg-id';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
+
+// Import utilities from centralized utility modules
+import {
+  loadAuthFile,
+  sleepMs,
+  uniqueStrings,
+  uniqueNumbers,
+  toLong,
+  safeNumber,
+  sha1FileHex,
+  isBlankText,
+  stringifyLossless,
+  previewLossless,
+  formatKstTimestamp,
+  normalizeIdValue,
+  toUnixSeconds,
+  snapToFiveMinutes,
+  toDate,
+  formatCalendarDate,
+  resolveTimeZone,
+  pickFirstValue,
+  pickFirstObject,
+  // video utilities
+  type VideoProbe,
+  resolveFfmpegBinary,
+  assertBinaryAvailable,
+  probeVideo,
+  toEven,
+  computeTargetVideoSize,
+  runProcess,
+  hasTrailerProfile,
+  summarizeTrailerKeys,
+  // parsing utilities
+  parseAttachments,
+  extractChatLogPayload,
+  parseAttachmentJson,
+  buildSpamChatLogInfo,
+  extractOpenLinkIdFromRaw,
+  resolveRoomFlags,
+  extractOpenLinkNameFromMr,
+  unwrapAttachment,
+  extractShareMessageData,
+  normalizeScheduleShareData,
+  extractEventId,
+  ensureScheduleAttachment,
+  previewCalendarBody,
+  assertCalendarOk,
+  previewBubbleBody,
+  assertBubbleOk,
+  waitForPushMethod,
+  extractProfileFromResponse,
+  escapeVCardValue,
+  buildVCard,
+  // mention utilities
+  MENTION_MARK_START,
+  MENTION_MARK_MID,
+  MENTION_MARK_END,
+  SPOILER_MARK_START,
+  SPOILER_MARK_END,
+  MESSAGE_SENDER_CACHE_LIMIT,
+  buildMentionMarker,
+  buildSpoilerMarker,
+  extractMarkedMentions,
+  extractMarkedSpoilers,
+  findAllIndices,
+  normalizeMentionInputs,
+  normalizeSpoilerInputs,
+  extractMentions,
+  // attachment utilities
+  buildExtra,
+  normalizeMediaAttachment,
+  normalizeFileAttachment,
+  normalizeLocationAttachment,
+  normalizeScheduleAttachment,
+  normalizeContactAttachment,
+  normalizeProfileAttachment,
+  normalizeLinkAttachment,
+  truncateReplyMessage,
+  buildReplyAttachment,
+  normalizeReplyTarget,
+  normalizeReactionTarget,
+  normalizeOpenChatMemberTarget,
+  normalizeOpenChatBlindTarget,
+  normalizeLogTarget,
+  normalizeEditTarget,
+  // feed utilities
+  extractFeedPayload,
+  extractMemberIdsFromPayload,
+  extractFeedMemberIds,
+  extractPushMemberIds,
+  buildMemberNameMap,
+  buildFeedMemberNameMap,
+  extractActorIdFromPayload,
+  PUSH_MEMBER_ACTIONS,
+  PUSH_DELETE_ACTIONS,
+  PUSH_HIDE_ACTIONS,
+  DEFAULT_FEED_TYPE_MAP,
+  resolveMemberActionFromPush,
+  resolveDeleteActionFromPush,
+  resolveHideActionFromPush,
+  normalizeMemberAction,
+  // client helpers
+  buildQrLoginHandlers,
+  streamEncryptedFile,
+} from './utils';
 
 // Import types from centralized type modules
 import {
@@ -116,1713 +219,6 @@ export {
 export { MemberType } from './types/member-type';
 export type { MemberTypeValue } from './types/member-type';
 export type MemberType = MemberTypeValue;
-
-function loadAuthFile(authPath: string): AuthFile {
-  if (!fs.existsSync(authPath)) {
-    throw new Error(`auth.json not found at ${authPath}. Run createAuthByQR() first.`);
-  }
-  const raw = fs.readFileSync(authPath, 'utf-8');
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`Invalid auth.json at ${authPath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-}
-
-function sleepMs(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function uniqueStrings(list) {
-  if (!Array.isArray(list)) return [];
-  return [...new Set(list.map((v) => String(v).trim()).filter(Boolean))];
-}
-
-function uniqueNumbers(list) {
-  if (!Array.isArray(list)) return [];
-  const nums = list.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0);
-  return [...new Set(nums)];
-}
-
-function toLong(value: any) {
-  if (Long.isLong(value)) return value;
-  if (typeof value === 'string') {
-    if (!value) return Long.fromNumber(0);
-    return Long.fromString(value);
-  }
-  if (typeof value === 'bigint') return Long.fromString(value.toString());
-  const num = typeof value === 'number' ? value : parseInt(value, 10);
-  return Long.fromNumber(Number.isFinite(num) ? num : 0);
-}
-
-function safeNumber(value: any, fallback = 0) {
-  const num = typeof value === 'number' ? value : parseInt(value, 10);
-  return Number.isFinite(num) ? num : fallback;
-}
-
-async function sha1FileHex(filePath: string) {
-  return await new Promise<string>((resolve, reject) => {
-    const hash = crypto.createHash('sha1');
-    const stream = fs.createReadStream(filePath);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('error', (err) => reject(err));
-    stream.on('end', () => resolve(hash.digest('hex')));
-  });
-}
-type VideoProbe = {
-  width: number;
-  height: number;
-  bitrate: number;
-  duration: number;
-  rotation: number;
-};
-
-function resolveFfmpegBinary(name: 'ffmpeg' | 'ffprobe', opts: { ffmpegPath?: string; ffprobePath?: string } = {}) {
-  const envFfmpeg = process.env.KAKAOFORGE_FFMPEG_PATH || process.env.FFMPEG_PATH || '';
-  const envFfprobe = process.env.KAKAOFORGE_FFPROBE_PATH || process.env.FFPROBE_PATH || '';
-  if (name === 'ffmpeg') {
-    return opts.ffmpegPath || envFfmpeg || 'ffmpeg';
-  }
-  const direct = opts.ffprobePath || envFfprobe;
-  if (direct) return direct;
-  const ffmpegPath = opts.ffmpegPath || envFfmpeg;
-  if (ffmpegPath) {
-    const ext = path.extname(ffmpegPath);
-    const probeName = ext ? `ffprobe${ext}` : 'ffprobe';
-    return path.join(path.dirname(ffmpegPath), probeName);
-  }
-  return 'ffprobe';
-}
-
-function assertBinaryAvailable(binPath: string, label: string) {
-  const res = spawnSync(binPath, ['-version'], { windowsHide: true, stdio: 'ignore' });
-  if (res.error || res.status !== 0) {
-    throw new Error(`${label} not found. Install ffmpeg and ensure it is in PATH, or pass ${label.toLowerCase()}Path.`);
-  }
-}
-
-function probeVideo(filePath: string, ffprobePath: string): VideoProbe {
-  const res = spawnSync(ffprobePath, [
-    '-v', 'error',
-    '-select_streams', 'v:0',
-    '-show_entries', 'stream=width,height,bit_rate,rotation,codec_type,codec_name:format=duration,bit_rate',
-    '-of', 'json',
-    filePath,
-  ], { windowsHide: true, encoding: 'utf8' });
-  if (res.error || res.status !== 0) {
-    const errMsg = res.stderr ? String(res.stderr).trim() : 'ffprobe failed';
-    throw new Error(`ffprobe failed: ${errMsg}`);
-  }
-  let data: any = {};
-  try {
-    data = JSON.parse(res.stdout || '{}');
-  } catch {
-    data = {};
-  }
-  const stream = Array.isArray(data.streams)
-    ? data.streams.find((s) => s && s.codec_type === 'video')
-    : null;
-  const width = Number(stream?.width || 0);
-  const height = Number(stream?.height || 0);
-  const rotation = Number(stream?.rotation ?? stream?.tags?.rotate ?? 0);
-  const streamBitrate = Number(stream?.bit_rate || 0);
-  const formatBitrate = Number(data.format?.bit_rate || 0);
-  const bitrate = Number.isFinite(streamBitrate) && streamBitrate > 0
-    ? streamBitrate
-    : (Number.isFinite(formatBitrate) ? formatBitrate : 0);
-  const duration = Number(data.format?.duration || 0);
-  return {
-    width: Number.isFinite(width) ? width : 0,
-    height: Number.isFinite(height) ? height : 0,
-    bitrate: Number.isFinite(bitrate) ? bitrate : 0,
-    duration: Number.isFinite(duration) ? duration : 0,
-    rotation: Number.isFinite(rotation) ? rotation : 0,
-  };
-}
-
-function toEven(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return 2;
-  const floored = Math.floor(value);
-  return floored % 2 === 0 ? floored : floored - 1;
-}
-
-function computeTargetVideoSize(meta: VideoProbe, resolution: number) {
-  let width = meta.width;
-  let height = meta.height;
-  if (meta.rotation === 90 || meta.rotation === 270) {
-    width = meta.height;
-    height = meta.width;
-  }
-  if (resolution && resolution > 0) {
-    const shortSide = Math.min(width, height);
-    if (shortSide >= resolution + 1) {
-      const scale = resolution / shortSide;
-      width = Math.round(width * scale);
-      height = Math.round(height * scale);
-    }
-  }
-  return { width: toEven(width), height: toEven(height) };
-}
-
-function runProcess(binPath: string, args: string[], timeoutMs = 0): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn(binPath, args, { windowsHide: true });
-    const stderr: Buffer[] = [];
-    const timer = timeoutMs && timeoutMs > 0
-      ? setTimeout(() => {
-          proc.kill();
-          reject(new Error(`${binPath} timed out`));
-        }, timeoutMs)
-      : null;
-    proc.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
-    proc.on('error', (err) => {
-      if (timer) clearTimeout(timer);
-      reject(err);
-    });
-    proc.on('close', (code) => {
-      if (timer) clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-      } else {
-        const message = Buffer.concat(stderr).toString('utf8').trim();
-        reject(new Error(message || `${binPath} failed with code ${code}`));
-      }
-    });
-  });
-}
-
-function hasTrailerProfile(conf: any) {
-  const trailerInfo = conf?.trailerInfo || {};
-  const trailerHighInfo = conf?.trailerHighInfo || {};
-  const base = Object.keys(trailerHighInfo).length ? trailerHighInfo : trailerInfo;
-  const bitrate = Number(base?.videoTranscodingBitrate || 0);
-  const resolution = Number(base?.videoTranscodingResolution || 0);
-  return Number.isFinite(bitrate) && bitrate > 0 && Number.isFinite(resolution) && resolution > 0;
-}
-
-function summarizeTrailerKeys(raw: any) {
-  if (!raw || typeof raw !== 'object') return null;
-  const keys = Object.keys(raw);
-  const trailerKeys = keys.filter((k) => /trailer|transcod|video/i.test(k));
-  if (trailerKeys.length === 0) return null;
-  const summary: Record<string, any> = {};
-  for (const key of trailerKeys) {
-    const value = raw[key];
-    if (value && typeof value === 'object') {
-      summary[key] = Array.isArray(value) ? `array(${value.length})` : Object.keys(value);
-    } else {
-      summary[key] = value;
-    }
-  }
-  return summary;
-}
-
-function waitForPushMethod(client: CarriageClient, method: string, timeoutMs: number) {
-  let settled = false;
-  let timer: NodeJS.Timeout | null = null;
-  let resolveFn: (packet: any) => void = () => {};
-  let rejectFn: (err: Error) => void = () => {};
-
-  const cleanup = () => {
-    if (settled) return;
-    settled = true;
-    if (timer) clearTimeout(timer);
-    client.off('push', onPush);
-    client.off('error', onError);
-    client.off('disconnected', onClose);
-  };
-
-  const onPush = (packet: any) => {
-    if (packet?.method !== method) return;
-    cleanup();
-    resolveFn(packet);
-  };
-
-  const onError = (err: Error) => {
-    cleanup();
-    rejectFn(err);
-  };
-
-  const onClose = () => {
-    cleanup();
-    rejectFn(new Error(`Upload connection closed before ${method}`));
-  };
-
-  const promise = new Promise<any>((resolve, reject) => {
-    resolveFn = resolve;
-    rejectFn = reject;
-    client.on('push', onPush);
-    client.on('error', onError);
-    client.on('disconnected', onClose);
-    if (timeoutMs && timeoutMs > 0) {
-      timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(`${method} timeout`));
-      }, timeoutMs);
-    }
-  });
-
-  return { promise, cancel: cleanup };
-}
-
-function parseAttachments(raw: any): any[] {
-  if (raw === undefined || raw === null) return [];
-  let parsed: any = raw;
-  if (typeof parsed === 'string') {
-    const trimmed = parsed.trim();
-    if (!trimmed) return [];
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      return [];
-    }
-  }
-  if (!parsed) return [];
-  if (Array.isArray(parsed)) return parsed;
-  if (typeof parsed === 'object') return [parsed];
-  return [];
-}
-
-function isBlankText(value: any) {
-  if (value === undefined || value === null) return true;
-  return String(value).trim().length === 0;
-}
-
-function truncateChatLogMessage(value: string) {
-  if (!value) return value;
-  if (value.length <= 500) return value;
-  return `${value.slice(0, 500)} ...`;
-}
-
-function extractChatLogPayload(raw: any): any {
-  if (!raw || typeof raw !== 'object') return null;
-  const chatLog = raw.chatLog;
-  if (chatLog && typeof chatLog === 'object') {
-    if (chatLog.chatLog && typeof chatLog.chatLog === 'object') return chatLog.chatLog;
-    return chatLog;
-  }
-  return raw;
-}
-
-function parseAttachmentJson(raw: any): any {
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof raw === 'object') return raw;
-  return null;
-}
-
-function buildSpamChatLogInfo(raw: any): string | null {
-  const chatLog = extractChatLogPayload(raw);
-  if (!chatLog || typeof chatLog !== 'object') return null;
-
-  const attachmentRaw = chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null;
-  const attachmentJson = parseAttachmentJson(attachmentRaw);
-  let message = chatLog.message ?? chatLog.msg ?? chatLog.text ?? '';
-  if (isBlankText(message) && typeof attachmentRaw === 'string' && attachmentJson === null) {
-    message = attachmentRaw;
-  }
-  message = truncateChatLogMessage(String(message ?? ''));
-
-  const hasAttachmentRaw =
-    attachmentRaw !== undefined &&
-    attachmentRaw !== null &&
-    !(typeof attachmentRaw === 'string' && attachmentRaw.trim().length === 0);
-  const messageBody: any = {};
-  if (!isBlankText(message)) {
-    messageBody.message = message;
-  }
-  if (attachmentJson !== null) {
-    const isArray = Array.isArray(attachmentJson);
-    const isObject = !isArray && typeof attachmentJson === 'object';
-    const hasContent = isArray ? attachmentJson.length > 0 : isObject ? Object.keys(attachmentJson).length > 0 : true;
-    if (hasContent || hasAttachmentRaw) {
-      messageBody.attachment = attachmentJson;
-    }
-  } else if (hasAttachmentRaw) {
-    messageBody.attachment = attachmentRaw;
-  }
-  if (typeof chatLog.referer === 'number') {
-    messageBody.referer = chatLog.referer;
-  }
-  if (typeof chatLog.revision === 'number') {
-    messageBody.revision = chatLog.revision;
-  }
-
-  if (Object.keys(messageBody).length === 0) return null;
-
-  const info = {
-    u: toLong(chatLog.authorId ?? chatLog.userId ?? chatLog.senderId ?? 0),
-    m: messageBody,
-    s: toLong(chatLog.sendAt ?? chatLog.createdAt ?? chatLog.s ?? 0),
-    t: safeNumber(chatLog.type ?? chatLog.msgType ?? 1, 1),
-    l: toLong(chatLog.logId ?? chatLog.msgId ?? chatLog.id ?? 0),
-    scope: typeof chatLog.scope === 'number' ? chatLog.scope : safeNumber(chatLog.scope ?? 1, 1),
-    threadId: toLong(chatLog.threadId ?? chatLog.tid ?? chatLog.thread ?? 0),
-  };
-
-  return stringifyLossless([info].reverse());
-}
-
-function normalizeOpenChatBlindTarget(
-  input: any
-): { memberId: number | string | Long; linkId?: number | string; isOpenChat?: boolean; chatLogInfo?: string } | null {
-  if (!input) return null;
-  const raw = input.raw ?? input;
-  const chatLog = extractChatLogPayload(raw);
-  if (!chatLog || typeof chatLog !== 'object') return null;
-
-  const memberId = chatLog.authorId ?? chatLog.userId ?? chatLog.senderId;
-  if (memberId === undefined || memberId === null) return null;
-
-  const linkId = extractOpenLinkIdFromRaw(raw) ?? (input.room?.openLinkId ? normalizeIdValue(input.room.openLinkId) : undefined);
-  const isOpenChat = input.room?.isOpenChat;
-  const chatLogInfo = buildSpamChatLogInfo(raw) ?? undefined;
-
-  return { memberId, linkId, isOpenChat, chatLogInfo };
-}
-
-function extractOpenLinkIdFromRaw(raw: any): number | string | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  if (raw.li !== undefined && raw.li !== null && raw.li !== '') {
-    return normalizeIdValue(raw.li);
-  }
-  const chatLog = raw.chatLog;
-  if (chatLog && typeof chatLog === 'object') {
-    if (chatLog.li !== undefined && chatLog.li !== null && chatLog.li !== '') {
-      return normalizeIdValue(chatLog.li);
-    }
-    const nested = chatLog.chatLog;
-    if (nested && typeof nested === 'object' && nested.li !== undefined && nested.li !== null && nested.li !== '') {
-      return normalizeIdValue(nested.li);
-    }
-  }
-  return undefined;
-}
-
-function resolveRoomFlags(source: any) {
-  const typeRaw = source?.type ?? source?.t ?? source?.chatType ?? '';
-  const typeName = String(typeRaw).toLowerCase();
-  const openLinkId = source?.openLinkId ?? source?.openChatId ?? source?.li ?? source?.openLink ?? source?.openChat;
-  const openToken = source?.openToken ?? source?.otk;
-
-  let isOpenChat = false;
-  if (typeof source?.isOpenChat === 'boolean') {
-    isOpenChat = source.isOpenChat;
-  } else if (typeof source?.openChat === 'boolean') {
-    isOpenChat = source.openChat;
-  } else if (typeof source?.isOpen === 'boolean') {
-    isOpenChat = source.isOpen;
-  } else if (typeName === 'om' || typeName === 'od') {
-    isOpenChat = true;
-  } else if (typeName.includes('open')) {
-    isOpenChat = true;
-  } else if (openLinkId || openToken) {
-    isOpenChat = true;
-  } else if (source?.meta) {
-    try {
-      const meta = typeof source.meta === 'string' ? JSON.parse(source.meta) : source.meta;
-      if (meta?.openLink || meta?.openLinkId || meta?.openChatId) {
-        isOpenChat = true;
-      }
-    } catch {
-      // ignore
-    }
-  } else if (Array.isArray(source?.chatMetas)) {
-    for (const meta of source.chatMetas) {
-      try {
-        const content = meta?.content ?? meta;
-        const parsed = typeof content === 'string' ? JSON.parse(content) : content;
-        if (parsed?.openLink || parsed?.openLinkId || parsed?.openChatId) {
-          isOpenChat = true;
-          break;
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  let isGroupChat = false;
-  if (typeof source?.isGroupChat === 'boolean') {
-    isGroupChat = source.isGroupChat;
-  } else if (typeof source?.isMultiChat === 'boolean') {
-    isGroupChat = source.isMultiChat;
-  } else if (typeof source?.multiChat === 'boolean') {
-    isGroupChat = source.multiChat;
-  } else if (typeof source?.isGroup === 'boolean') {
-    isGroupChat = source.isGroup;
-  } else if (typeof source?.directChat === 'boolean') {
-    isGroupChat = !source.directChat;
-  } else if (isOpenChat) {
-    if (typeName === 'od') {
-      isGroupChat = false;
-    } else {
-      isGroupChat = true;
-    }
-  } else if (typeName.includes('multi') || typeName.includes('group') || typeName.includes('moim')) {
-    isGroupChat = true;
-  } else if (typeName.includes('direct') || typeName.includes('memo') || typeName.includes('self')) {
-    isGroupChat = false;
-  }
-
-  return { isGroupChat, isOpenChat };
-}
-
-function extractOpenLinkNameFromMr(input: any): string {
-  if (!input) return '';
-  let parsed: any = input;
-  if (typeof parsed === 'string') {
-    const trimmed = parsed.trim();
-    if (!trimmed) return '';
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      return '';
-    }
-  }
-  if (!parsed || typeof parsed !== 'object') return '';
-
-  const candidates = [
-    'ln',
-    'linkName',
-    'name',
-    'title',
-    'subject',
-    'roomName',
-  ];
-
-  for (const key of candidates) {
-    const value = parsed[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-
-  const nested = [parsed.openLink, parsed.link, parsed.ol, parsed.open];
-  for (const node of nested) {
-    if (!node || typeof node !== 'object') continue;
-    for (const key of candidates) {
-      const value = node[key];
-      if (typeof value === 'string' && value.trim()) return value.trim();
-    }
-  }
-
-  return '';
-}
-
-function unwrapAttachment(input: any) {
-  if (!input || typeof input !== 'object') return input;
-  if ('attachment' in input && (input as any).attachment !== undefined) {
-    return (input as any).attachment;
-  }
-  return input;
-}
-
-
-
-
-function toUnixSeconds(value?: number | Date) {
-  if (value === undefined || value === null) return undefined;
-  if (value instanceof Date) {
-    return Math.floor(value.getTime() / 1000);
-  }
-  const num = typeof value === 'number' ? value : parseInt(value, 10);
-  if (!Number.isFinite(num)) return undefined;
-  return num > 1e12 ? Math.floor(num / 1000) : Math.floor(num);
-}
-
-function snapToFiveMinutes(date: Date, mode: 'floor' | 'round' | 'ceil' = 'ceil') {
-  const step = 5 * 60 * 1000;
-  const ms = date.getTime();
-  const remainder = ms % step;
-  if (remainder === 0) return new Date(ms);
-  let snapped: number;
-  if (mode === 'floor') snapped = Math.floor(ms / step) * step;
-  else if (mode === 'round') snapped = Math.round(ms / step) * step;
-  else snapped = Math.ceil(ms / step) * step;
-  return new Date(snapped);
-}
-
-function toDate(value?: number | Date) {
-  if (value === undefined || value === null) return null;
-  if (value instanceof Date) return value;
-  const num = typeof value === 'number' ? value : parseInt(value, 10);
-  if (!Number.isFinite(num)) return null;
-  return num > 1e12 ? new Date(num) : new Date(num * 1000);
-}
-
-function formatCalendarDate(date: Date) {
-  const iso = date.toISOString();
-  return iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-}
-
-function resolveTimeZone(fallback = 'Asia/Seoul') {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    if (tz) return tz;
-  } catch {
-    // ignore
-  }
-  return fallback;
-}
-
-function extractShareMessageData(body: any) {
-  if (!body) return null;
-  const data = body.data ?? body.shareMessage ?? body;
-  if (!data) return null;
-  if (typeof data === 'string') {
-    try {
-      return JSON.parse(data);
-    } catch {
-      return data;
-    }
-  }
-  return data;
-}
-
-function normalizeScheduleShareData(data: any) {
-  if (!data) return data;
-  if (Array.isArray(data)) return data;
-  if (typeof data === 'object') {
-    if (data.P || data.CAL || data.C) return [data];
-  }
-  return data;
-}
-
-function extractEventId(body: any) {
-  const eId = body?.eId || body?.eventId || body?.data?.eId || body?.data?.eventId || body?.result?.eId;
-  if (eId === undefined || eId === null) return '';
-  return String(eId);
-}
-
-function ensureScheduleAttachment(base: any, fallback: any) {
-  if (typeof base === 'string') return base;
-  if (Array.isArray(base)) return base;
-  const result: any = typeof base === 'object' && base ? { ...base } : {};
-  if (result.eventAt === undefined && fallback.eventAt !== undefined) result.eventAt = fallback.eventAt;
-  if (!result.title && fallback.title) result.title = fallback.title;
-  if (result.subtype === undefined && fallback.subtype !== undefined) result.subtype = fallback.subtype;
-  if (result.alarmAt === undefined && fallback.alarmAt !== undefined) result.alarmAt = fallback.alarmAt;
-  if (!result.postId && !result.scheduleId) {
-    if (fallback.postId !== undefined) result.postId = fallback.postId;
-    if (fallback.scheduleId !== undefined) result.scheduleId = fallback.scheduleId;
-  }
-  return result;
-}
-
-function previewCalendarBody(body: any, limit = 800) {
-  if (body === undefined || body === null) return '';
-  let text = '';
-  if (typeof body === 'string') {
-    text = body;
-  } else {
-    try {
-      text = JSON.stringify(body);
-    } catch {
-      text = String(body);
-    }
-  }
-  if (limit > 0 && text.length > limit) {
-    return `${text.slice(0, limit)}...`;
-  }
-  return text;
-}
-
-function assertCalendarOk(res: any, label: string) {
-  const statusCode = res?.status;
-  if (typeof statusCode === 'number' && statusCode >= 400) {
-    const bodyPreview = previewCalendarBody(res?.body);
-    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
-    throw new Error(`${label} status=${statusCode}${suffix}`);
-  }
-  const body = res?.body;
-  if (body && typeof body === 'object' && typeof body.status === 'number' && body.status !== 0) {
-    const message = body.message ? ` (${body.message})` : '';
-    const bodyPreview = previewCalendarBody(body);
-    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
-    throw new Error(`${label} status=${body.status}${message}${suffix}`);
-  }
-}
-
-function previewBubbleBody(body: any, limit = 800) {
-  if (body === undefined || body === null) return '';
-  let text = '';
-  if (typeof body === 'string') {
-    text = body;
-  } else {
-    try {
-      text = JSON.stringify(body);
-    } catch {
-      text = String(body);
-    }
-  }
-  if (limit > 0 && text.length > limit) {
-    return `${text.slice(0, limit)}...`;
-  }
-  return text;
-}
-
-function assertBubbleOk(res: any, label: string) {
-  const statusCode = res?.status;
-  if (typeof statusCode === 'number' && statusCode >= 400) {
-    const bodyPreview = previewBubbleBody(res?.body);
-    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
-    throw new Error(`${label} status=${statusCode}${suffix}`);
-  }
-  const body = res?.body;
-  if (body && typeof body === 'object' && typeof body.status === 'number' && body.status !== 0) {
-    const message = body.message ? ` (${body.message})` : '';
-    const bodyPreview = previewBubbleBody(body);
-    const suffix = bodyPreview ? ` body=${bodyPreview}` : '';
-    throw new Error(`${label} status=${body.status}${message}${suffix}`);
-  }
-}
-
-function stringifyLossless(obj: unknown) {
-  return LosslessJSON.stringify(obj, (key, value) => {
-    if (typeof value === 'bigint' || Long.isLong(value)) {
-      return new (LosslessJSON as any).LosslessNumber(value.toString());
-    }
-    return value;
-  });
-}
-
-function previewLossless(obj: unknown, maxLen = 800) {
-  let text = '';
-  try {
-    text = stringifyLossless(obj);
-  } catch {
-    text = String(obj);
-  }
-  if (text.length > maxLen) {
-    return `${text.slice(0, maxLen)}...`;
-  }
-  return text;
-}
-
-function formatKstTimestamp(date = new Date()) {
-  const kst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().replace('Z', '+09:00');
-}
-
-function buildQrLoginHandlers() {
-  let qrcode: any = null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    qrcode = require('qrcode-terminal');
-  } catch {
-    qrcode = null;
-  }
-
-  const onQrUrl = (url: string) => {
-    console.log('\n[QR] Scan this code in KakaoTalk > Settings > QR Login.\n');
-    if (qrcode && typeof qrcode.generate === 'function') {
-      qrcode.generate(url, { small: true }, (qr: string) => {
-        console.log(qr);
-      });
-    }
-    console.log(`  ${url}\n`);
-  };
-
-  const onPasscode = (passcode: string) => {
-    if (!passcode) return;
-    const digits = String(passcode).split('');
-    const big: Record<string, string[]> = {
-      '0': [' 000 ', '0   0', '0   0', '0   0', ' 000 '],
-      '1': ['  1  ', ' 11  ', '  1  ', '  1  ', ' 111 '],
-      '2': [' 222 ', '2   2', '  2  ', ' 2   ', '22222'],
-      '3': ['3333 ', '    3', ' 333 ', '    3', '3333 '],
-      '4': ['4   4', '4   4', '44444', '    4', '    4'],
-      '5': ['55555', '5    ', '5555 ', '    5', '5555 '],
-      '6': [' 666 ', '6    ', '6666 ', '6   6', ' 666 '],
-      '7': ['77777', '   7 ', '  7  ', ' 7   ', ' 7   '],
-      '8': [' 888 ', '8   8', ' 888 ', '8   8', ' 888 '],
-      '9': [' 999 ', '9   9', ' 9999', '    9', ' 999 '],
-    };
-
-    process.stdout.write('\x1B[2J\x1B[H');
-    console.log('\n[QR] Passcode:\n');
-    for (let row = 0; row < 5; row += 1) {
-      const line = digits.map((d) => (big[d] ? big[d][row] : '     ')).join('   ');
-      console.log('      ' + line);
-    }
-    console.log('\nEnter this passcode on your phone.\n');
-  };
-
-  return { onQrUrl, onPasscode };
-}
-
-function buildExtra(attachment?: AttachmentInput, extra?: string) {
-  if (typeof extra === 'string' && extra.length > 0) return extra;
-  if (attachment === undefined || attachment === null) return undefined;
-  if (typeof attachment === 'string') return attachment;
-  try {
-    return stringifyLossless(attachment);
-  } catch {
-    return String(attachment);
-  }
-}
-
-function normalizeMediaAttachment(input: any) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
-  const attachment: any = { ...input };
-  if (attachment.size !== undefined && attachment.s === undefined) attachment.s = attachment.size;
-  if (attachment.mime !== undefined && attachment.mt === undefined) attachment.mt = attachment.mime;
-  if (attachment.duration !== undefined && attachment.d === undefined) attachment.d = attachment.duration;
-  if (attachment.width !== undefined && attachment.w === undefined) attachment.w = attachment.width;
-  if (attachment.height !== undefined && attachment.h === undefined) attachment.h = attachment.height;
-  if (attachment.token !== undefined && attachment.tk === undefined) attachment.tk = attachment.token;
-  if (attachment.tokenHigh !== undefined && attachment.tkh === undefined) attachment.tkh = attachment.tokenHigh;
-  if (attachment.urlHigh !== undefined && attachment.urlh === undefined) attachment.urlh = attachment.urlHigh;
-  return attachment;
-}
-
-function normalizeFileAttachment(input: any) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
-  const attachment: any = { ...input };
-  if (attachment.size === undefined && attachment.s !== undefined) attachment.size = attachment.s;
-  if (attachment.name === undefined && attachment.filename !== undefined) attachment.name = attachment.filename;
-  return attachment;
-}
-
-function normalizeLocationAttachment(input: any) {
-  if (!input) return input;
-  if (typeof input === 'string') return input;
-  if (typeof input === 'object' && 'lat' in input && 'lng' in input) {
-    const attachment: any = {
-      lat: Number(input.lat),
-      lng: Number(input.lng),
-    };
-    if (input.address) attachment.a = input.address;
-    if (input.title) attachment.t = input.title;
-    if (typeof input.isCurrent === 'boolean') attachment.c = input.isCurrent;
-    if (input.placeId !== undefined) attachment.cid = String(input.placeId);
-    if (input.extra && typeof input.extra === 'object') {
-      Object.assign(attachment, input.extra);
-    }
-    return attachment;
-  }
-  return input;
-}
-
-function normalizeScheduleAttachment(input: any) {
-  if (!input) return input;
-  if (typeof input === 'string') return input;
-  if (typeof input === 'object' && ('eventAt' in input || 'title' in input)) {
-    const attachment: any = {};
-    const eventAt = toUnixSeconds(input.eventAt);
-    if (eventAt !== undefined) attachment.eventAt = eventAt;
-    if (input.title) attachment.title = input.title;
-    if (input.postId !== undefined) attachment.postId = String(input.postId);
-    if (input.scheduleId !== undefined) attachment.scheduleId = String(input.scheduleId);
-    if (input.subtype !== undefined) attachment.subtype = input.subtype;
-    const alarmAt = toUnixSeconds(input.alarmAt);
-    if (alarmAt !== undefined) attachment.alarmAt = alarmAt;
-    if (input.extra && typeof input.extra === 'object') {
-      Object.assign(attachment, input.extra);
-    }
-    return attachment;
-  }
-  return input;
-}
-
-function normalizeContactAttachment(input: any) {
-  if (!input) return input;
-  if (typeof input === 'string') return { name: input };
-  if (typeof input === 'object') {
-    const attachment: any = { ...input };
-    if (attachment.extra && typeof attachment.extra === 'object') {
-      Object.assign(attachment, attachment.extra);
-      delete attachment.extra;
-    }
-    if (!attachment.url && attachment.path) {
-      attachment.url = attachment.path;
-      delete attachment.path;
-    }
-    return attachment;
-  }
-  return input;
-}
-
-function normalizeProfileAttachment(input: any) {
-  if (!input) return input;
-  if (typeof input === 'string') {
-    return { accessPermit: input };
-  }
-  if (typeof input === 'object') {
-    const attachment: any = { ...input };
-    if (attachment.extra && typeof attachment.extra === 'object') {
-      Object.assign(attachment, attachment.extra);
-      delete attachment.extra;
-    }
-    if (attachment.userId === undefined && attachment.id !== undefined) attachment.userId = attachment.id;
-    if (attachment.nickName === undefined && attachment.nickname !== undefined) attachment.nickName = attachment.nickname;
-    if (attachment.fullProfileImageUrl === undefined && attachment.fullProfileImage !== undefined) {
-      attachment.fullProfileImageUrl = attachment.fullProfileImage;
-    }
-    if (attachment.profileImageUrl === undefined && attachment.profileImage !== undefined) {
-      attachment.profileImageUrl = attachment.profileImage;
-    }
-    if (attachment.statusMessage === undefined && attachment.status !== undefined) {
-      attachment.statusMessage = attachment.status;
-    }
-    return attachment;
-  }
-  return input;
-}
-
-function extractMentions(raw: any): any[] | undefined {
-  if (!raw) return undefined;
-  if (Array.isArray(raw)) {
-    if (raw.length > 0 && raw.every((entry) => typeof entry === 'object' && entry && 'user_id' in entry)) {
-      return raw;
-    }
-    for (const entry of raw) {
-      if (entry && Array.isArray(entry.mentions)) {
-        return entry.mentions;
-      }
-    }
-    return undefined;
-  }
-  if (typeof raw === 'object' && Array.isArray(raw.mentions)) {
-    return raw.mentions;
-  }
-  return undefined;
-}
-
-const MENTION_MARK_START = '\u0002';
-const MENTION_MARK_MID = '\u0003';
-const MENTION_MARK_END = '\u0004';
-const SPOILER_MARK_START = '\u0005';
-const SPOILER_MARK_END = '\u0006';
-const MESSAGE_SENDER_CACHE_LIMIT = 200;
-
-function buildMentionMarker(userId: number | string, name: string) {
-  const safeName = String(name || '')
-    .split(MENTION_MARK_START).join('')
-    .split(MENTION_MARK_MID).join('')
-    .split(MENTION_MARK_END).join('');
-  return `${MENTION_MARK_START}${userId}${MENTION_MARK_MID}${safeName}${MENTION_MARK_END}`;
-}
-
-function buildSpoilerMarker(text: string) {
-  const safeText = String(text || '')
-    .split(SPOILER_MARK_START).join('')
-    .split(SPOILER_MARK_END).join('');
-  return `${SPOILER_MARK_START}${safeText}${SPOILER_MARK_END}`;
-}
-
-function extractMarkedMentions(text: string): { text: string; mentions: MentionInput[] } {
-  if (!text || !text.includes(MENTION_MARK_START)) {
-    return { text, mentions: [] };
-  }
-
-  let out = '';
-  const mentions: MentionInput[] = [];
-  let mentionIndex = 0;
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    const start = text.indexOf(MENTION_MARK_START, cursor);
-    if (start === -1) {
-      out += text.slice(cursor);
-      break;
-    }
-
-    out += text.slice(cursor, start);
-    const mid = text.indexOf(MENTION_MARK_MID, start + 1);
-    const end = text.indexOf(MENTION_MARK_END, mid + 1);
-    if (mid === -1 || end === -1) {
-      out += text.slice(start, start + 1);
-      cursor = start + 1;
-      continue;
-    }
-
-    const userId = text.slice(start + 1, mid);
-    const name = text.slice(mid + 1, end);
-    const mentionText = `@${name}`;
-    mentionIndex += 1;
-    const len = name.length || String(userId).length;
-    mentions.push({ userId, at: [mentionIndex], len });
-    out += mentionText;
-    cursor = end + 1;
-  }
-
-  return { text: out, mentions };
-}
-
-function extractMarkedSpoilers(text: string): { text: string; spoilers: SpoilerInput[] } {
-  if (!text || !text.includes(SPOILER_MARK_START)) {
-    return { text, spoilers: [] };
-  }
-
-  let out = '';
-  const spoilers: SpoilerInput[] = [];
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    const start = text.indexOf(SPOILER_MARK_START, cursor);
-    if (start === -1) {
-      out += text.slice(cursor);
-      break;
-    }
-
-    out += text.slice(cursor, start);
-    const end = text.indexOf(SPOILER_MARK_END, start + 1);
-    if (end === -1) {
-      out += text.slice(start, start + 1);
-      cursor = start + 1;
-      continue;
-    }
-
-    const spoilerText = text.slice(start + 1, end);
-    const loc = out.length;
-    const len = spoilerText.length;
-    if (len > 0) {
-      spoilers.push({ loc, len });
-    }
-    out += spoilerText;
-    cursor = end + 1;
-  }
-
-  return { text: out, spoilers };
-}
-
-function findAllIndices(text: string, token: string) {
-  if (!token) return [];
-  const indices: number[] = [];
-  let start = 0;
-  while (start <= text.length) {
-    const idx = text.indexOf(token, start);
-    if (idx === -1) break;
-    indices.push(idx);
-    start = idx + token.length;
-  }
-  return indices;
-}
-
-function normalizeMentionInputs(text: string, mentions?: MentionInput[]) {
-  if (!Array.isArray(mentions) || mentions.length === 0) return [];
-  const result: Array<{ user_id: number | string; at: number[]; len: number }> = [];
-
-  const occurrenceBuckets = new Map<number, number[]>();
-  const occurrenceMeta: Array<{ idx: number; inputIndex: number }> = [];
-  const mentionTokens: string[] = [];
-  for (let i = 0; i < mentions.length; i += 1) {
-    const input = mentions[i];
-    const rawAt = (input as any)?.at;
-    const hasAt =
-      Array.isArray(rawAt)
-        ? rawAt.some((v) => safeNumber(v, -1) >= 0)
-        : typeof rawAt === 'number' && safeNumber(rawAt, -1) >= 0;
-    if (hasAt) continue;
-
-    const mentionText =
-      (input as any)?.text ??
-      (input as any)?.name ??
-      (input as any)?.nickname ??
-      (input as any)?.nickName ??
-      '';
-    if (!mentionText || !text) continue;
-    const trimmed = String(mentionText);
-    const token = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
-    mentionTokens[i] = token;
-    const hits = findAllIndices(text, token);
-    for (const idx of hits) {
-      occurrenceMeta.push({ idx, inputIndex: i });
-    }
-  }
-
-  if (occurrenceMeta.length > 0) {
-    occurrenceMeta.sort((a, b) => a.idx - b.idx);
-    let ordinal = 0;
-    for (const entry of occurrenceMeta) {
-      ordinal += 1;
-      const list = occurrenceBuckets.get(entry.inputIndex) || [];
-      list.push(ordinal);
-      occurrenceBuckets.set(entry.inputIndex, list);
-    }
-  }
-
-  for (let inputIndex = 0; inputIndex < mentions.length; inputIndex += 1) {
-    const input = mentions[inputIndex];
-    if (!input) continue;
-    const userId = normalizeIdValue(
-      (input as any).userId ?? (input as any).user_id ?? (input as any).id ?? 0
-    );
-    if (!userId) continue;
-
-    const rawAt = (input as any).at;
-    let atList = Array.isArray(rawAt) ? rawAt.map((v) => safeNumber(v, -1)).filter((v) => v >= 0) : [];
-    if (typeof rawAt === 'number') {
-      const idx = safeNumber(rawAt, -1);
-      if (idx >= 0) atList = [idx];
-    }
-
-    const mentionText =
-      (input as any).text ??
-      (input as any).name ??
-      (input as any).nickname ??
-      (input as any).nickName ??
-      '';
-
-    let len = safeNumber((input as any).len ?? (input as any).length, 0);
-    if (atList.length === 0 && occurrenceBuckets.has(inputIndex)) {
-      atList = occurrenceBuckets.get(inputIndex) || [];
-    }
-
-    if (atList.length === 0) continue;
-    if (!len || len <= 0) {
-      len = mentionText ? String(mentionText).replace(/^@/, '').length : 1;
-      if (!len || len <= 0) len = 1;
-    }
-
-    const cleanedAt = [...new Set(atList)].sort((a, b) => a - b);
-    result.push({ user_id: userId, at: cleanedAt, len });
-  }
-
-  return result;
-}
-
-function normalizeSpoilerInputs(text: string, spoilers?: SpoilerInput[]) {
-  if (!Array.isArray(spoilers) || spoilers.length === 0) return [];
-  const result: Array<{ loc: number; len: number }> = [];
-  const maxLen = text ? text.length : 0;
-
-  for (const input of spoilers) {
-    if (!input) continue;
-    let loc = safeNumber(input.loc ?? input.start, -1);
-    let len = safeNumber(input.len ?? input.length, 0);
-    if ((!len || len <= 0) && input.end !== undefined) {
-      const end = safeNumber(input.end, -1);
-      if (end >= 0 && loc >= 0) {
-        len = end - loc;
-      }
-    }
-    if (loc < 0 || len <= 0) continue;
-    if (maxLen > 0) {
-      if (loc >= maxLen) continue;
-      if (loc + len > maxLen) {
-        len = maxLen - loc;
-      }
-      if (len <= 0) continue;
-    }
-    result.push({ loc, len });
-  }
-
-  result.sort((a, b) => a.loc - b.loc);
-  return result;
-}
-
-function normalizeIdValue(value: any): number | string {
-  if (value === undefined || value === null) return 0;
-  if (Long.isLong(value)) return value.toString();
-  if (typeof value === 'object' && value !== null) {
-    if (typeof (value as any).low === 'number' && typeof (value as any).high === 'number') {
-      try {
-        const unsigned = typeof (value as any).unsigned === 'boolean' ? (value as any).unsigned : false;
-        return Long.fromBits((value as any).low, (value as any).high, unsigned).toString();
-      } catch {
-        // fall through
-      }
-    }
-  }
-  if (typeof value === 'bigint') return value.toString();
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) return value.toString();
-    return value;
-  }
-  if (typeof value === 'object' && typeof value.toString === 'function') {
-    const str = value.toString();
-    if (/^\d+$/.test(str)) return str;
-  }
-  return Number(value) || 0;
-}
-
-function extractFeedPayload(chatLog: any, attachmentsRaw: any[]): any | null {
-  if (chatLog && typeof chatLog === 'object') {
-    if (chatLog.feed && typeof chatLog.feed === 'object') return chatLog.feed;
-    if (chatLog.message && typeof chatLog.message === 'object') {
-      const maybeFeed = chatLog.message as any;
-      if (maybeFeed && typeof maybeFeed === 'object' && ('feedType' in maybeFeed || 'ft' in maybeFeed || 'feed' in maybeFeed)) {
-        return maybeFeed.feed || maybeFeed;
-      }
-    }
-    if (typeof chatLog.message === 'string') {
-      const text = chatLog.message.trim();
-      if (text.startsWith('{') || text.startsWith('[')) {
-        try {
-          const parsed = LosslessJSON.parse(text) as any;
-          if (parsed && typeof parsed === 'object' && ('feedType' in parsed || 'ft' in parsed || 'feed' in parsed)) {
-            return parsed.feed || parsed;
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-    if (chatLog.extra !== undefined && chatLog.extra !== null) {
-      const extra = parseAttachmentJson(chatLog.extra) ?? chatLog.extra;
-      if (extra && typeof extra === 'object') {
-        if ('feedType' in extra || 'ft' in extra || 'feed' in extra) {
-          return (extra as any).feed || extra;
-        }
-      }
-    }
-  }
-
-  if (Array.isArray(attachmentsRaw)) {
-    for (const entry of attachmentsRaw) {
-      if (!entry || typeof entry !== 'object') continue;
-      if ('feedType' in entry || 'ft' in entry || 'feed' in entry) {
-        return (entry as any).feed || entry;
-      }
-    }
-  }
-  return null;
-}
-
-function extractMemberIdsFromPayload(payload: any, opts: { excludeUserId?: boolean } = {}) {
-  const out: Array<number | string> = [];
-  const seen = new Set<string>();
-  const add = (value: any) => {
-    const id = normalizeIdValue(value);
-    if (!id) return;
-    const key = String(id);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(id);
-  };
-
-  if (Array.isArray(payload?.memberIds)) {
-    payload.memberIds.forEach(add);
-  }
-  if (Array.isArray(payload?.mids)) {
-    payload.mids.forEach(add);
-  }
-  if (Array.isArray(payload?.memberIds)) {
-    payload.memberIds.forEach(add);
-  }
-  if (Array.isArray(payload?.members)) {
-    for (const mem of payload.members) {
-      add(mem?.userId);
-    }
-  }
-  if (!opts.excludeUserId) {
-    add(payload?.userId);
-  }
-  return out;
-}
-
-function extractFeedMemberIds(feed: any) {
-  const out: Array<number | string> = [];
-  const seen = new Set<string>();
-  const add = (value: any) => {
-    const id = normalizeIdValue(value);
-    if (!id) return;
-    const key = String(id);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(id);
-  };
-  if (feed?.member && typeof feed.member === 'object') {
-    add(feed.member.userId);
-  }
-  if (Array.isArray(feed?.members)) {
-    for (const mem of feed.members) {
-      add(mem?.userId);
-    }
-  }
-  return out;
-}
-
-function extractPushMemberIds(body: any, method: string) {
-  const out: Array<number | string> = [];
-  const seen = new Set<string>();
-  const add = (value: any) => {
-    const id = normalizeIdValue(value);
-    if (!id) return;
-    const key = String(id);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(id);
-  };
-
-  if (method === 'DELMEM' && body?.kid !== undefined) {
-    add(body.kid);
-  }
-
-  if (Array.isArray(body?.memberIds)) {
-    body.memberIds.forEach(add);
-  }
-
-  if (Array.isArray(body?.members)) {
-    for (const mem of body.members) {
-      add(mem?.userId);
-    }
-  }
-
-  if (body?.userId !== undefined) {
-    add(body.userId);
-  }
-
-  return out;
-}
-
-function buildMemberNameMap(payload: any) {
-  const map = new Map<string, string>();
-  const add = (idValue: any, nameValue: any) => {
-    const id = normalizeIdValue(idValue);
-    if (!id) return;
-    const name = nameValue ? String(nameValue) : '';
-    map.set(String(id), name);
-  };
-  if (Array.isArray(payload?.members)) {
-    for (const mem of payload.members) {
-      add(mem?.userId, mem?.nickName ?? mem?.nickname ?? mem?.name);
-    }
-  }
-  add(payload?.userId, payload?.memberName ?? payload?.nickName);
-  return map;
-}
-
-function buildFeedMemberNameMap(feed: any) {
-  const map = new Map<string, string>();
-  const add = (idValue: any, nameValue: any) => {
-    const id = normalizeIdValue(idValue);
-    if (!id) return;
-    const name = nameValue ? String(nameValue) : '';
-    map.set(String(id), name);
-  };
-  if (feed?.member && typeof feed.member === 'object') {
-    add(feed.member.userId, feed.member.nickName);
-  }
-  if (Array.isArray(feed?.members)) {
-    for (const mem of feed.members) {
-      add(mem?.userId, mem?.nickName);
-    }
-  }
-  return map;
-}
-
-function extractActorIdFromPayload(payload: any) {
-  return normalizeIdValue(
-    payload?.actorId ??
-      payload?.aid ??
-      payload?.inviterId ??
-      payload?.fromUserId ??
-      payload?.ownerId ??
-      0
-  );
-}
-
-const PUSH_MEMBER_ACTIONS: Record<string, MemberAction> = {
-  NEWMEM: 'join',
-  JOIN: 'join',
-  INVMEM: 'invite',
-  INVITEMEM: 'invite',
-  DELMEM: 'leave',
-  LEAVEMEM: 'leave',
-  LEAVE: 'leave',
-  KICKMEM: 'kick',
-  KICK: 'kick',
-};
-
-const PUSH_DELETE_ACTIONS = new Set(['DELETEMSG', 'DELMSG', 'DELM', 'DELMESSAGE', 'MSGDEL', 'SYNCDLMSG']);
-const PUSH_HIDE_ACTIONS = new Set(['BLIND', 'BLINDMSG', 'HIDEMSG', 'HIDE', 'SYNCREWR']);
-
-const DEFAULT_FEED_TYPE_MAP: Record<number, MemberAction> = {
-  4: 'join',
-  6: 'kick',
-};
-
-function resolveMemberActionFromPush(method: string): MemberAction | null {
-  return PUSH_MEMBER_ACTIONS[method] || null;
-}
-
-function resolveDeleteActionFromPush(method: string): boolean {
-  const key = String(method || '').toUpperCase();
-  return PUSH_DELETE_ACTIONS.has(key);
-}
-
-function resolveHideActionFromPush(method: string): boolean {
-  const key = String(method || '').toUpperCase();
-  return PUSH_HIDE_ACTIONS.has(key);
-}
-
-function normalizeMemberAction(value: any): MemberAction | null {
-  if (!value) return null;
-  const text = String(value).toLowerCase();
-  if (text.includes('join') || text.includes('enter')) return 'join';
-  if (text.includes('leave') || text.includes('exit')) return 'leave';
-  if (text.includes('invite')) return 'invite';
-  if (text.includes('kick') || text.includes('ban')) return 'kick';
-  return null;
-}
-
-function truncateReplyMessage(text: string, maxLen = 100) {
-  if (!text) return '';
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen);
-}
-
-function buildReplyAttachment(target: ReplyTarget, opts: ReplyOptions = {}) {
-  if (!target || !target.logId || !target.userId) {
-    throw new Error('reply target requires logId and userId');
-  }
-  const linkIdValue = target.linkId ?? 0;
-  if (target.isOpenChat && (!linkIdValue || linkIdValue === 0 || linkIdValue === '0')) {
-    throw new Error('open chat reply requires openLinkId');
-  }
-  const srcMessage = truncateReplyMessage(target.text || '');
-  const attachment: any = {
-    src_logId: toLong(target.logId),
-    src_userId: toLong(target.userId),
-    src_message: srcMessage,
-    src_type: typeof target.type === 'number' ? target.type : MessageType.Text,
-    src_linkId: toLong(linkIdValue),
-    src_mentions: Array.isArray(target.mentions) ? target.mentions : [],
-    mentions: null,
-    attach_type: typeof opts.attachType === 'number' ? opts.attachType : 0,
-    attach_only: !!opts.attachOnly,
-    attach_content: null,
-    src_emojis: null,
-    src_spoilers: null,
-  };
-  return attachment;
-}
-
-function normalizeReplyTarget(input: any): ReplyTarget | null {
-  if (!input) return null;
-
-  if (input.raw && input.raw.chatLog) {
-    const rawLog = input.raw.chatLog;
-    const inner = rawLog?.chatLog || rawLog;
-    const logId = normalizeIdValue(inner.logId || inner.msgId || rawLog.logId || rawLog.msgId || input.logId || input.message?.id || 0);
-    const userId = normalizeIdValue(
-      inner.authorId ||
-        inner.senderId ||
-        inner.userId ||
-        rawLog.authorId ||
-        rawLog.senderId ||
-        rawLog.userId ||
-        input.sender?.id ||
-        input.senderId ||
-        0
-    );
-    const text = inner.message || inner.msg || inner.text || rawLog.message || rawLog.msg || rawLog.text || input.message?.text || input.text || '';
-    const type = safeNumber(
-      inner.type || inner.msgType || rawLog.type || rawLog.msgType || input.message?.type || input.type || MessageType.Text,
-      MessageType.Text
-    );
-    const mentions = extractMentions(
-      inner.attachment ??
-        inner.attachments ??
-        inner.extra ??
-        rawLog.attachment ??
-        rawLog.attachments ??
-        rawLog.extra ??
-        input.attachmentsRaw
-    );
-    const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
-    const isOpenChat = input.room?.isOpenChat === true || !!linkId;
-    return { logId, userId, text, type, mentions, linkId, isOpenChat };
-  }
-
-  if (input.message && input.sender) {
-    const message = input.message || {};
-    const sender = input.sender || {};
-    const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
-    const isOpenChat = input.room?.isOpenChat === true || !!linkId;
-    return {
-      logId: normalizeIdValue(message.logId || message.id || input.logId || 0),
-      userId: normalizeIdValue(sender.id || input.senderId || 0),
-      text: message.text || input.text || '',
-      type: safeNumber(message.type || input.type || MessageType.Text, MessageType.Text),
-      mentions: extractMentions(input.attachmentsRaw),
-      linkId,
-      isOpenChat,
-    };
-  }
-
-  const logId = normalizeIdValue(input.logId || input.msgId || input.id || 0);
-  const userId = normalizeIdValue(
-    input.userId || input.senderId || input.authorId || input.sender?.id || 0
-  );
-  const text = input.message || input.text || input.msg || '';
-  const type = safeNumber(input.type || input.msgType || MessageType.Text, MessageType.Text);
-  const mentions = input.mentions || input.src_mentions || extractMentions(input.attachmentsRaw);
-  const linkId = extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
-  const isOpenChat = input.room?.isOpenChat === true || !!linkId;
-
-  return { logId, userId, text, type, mentions, linkId, isOpenChat };
-}
-
-function normalizeReactionTarget(input: any): { logId: number | string; linkId?: number | string; isOpenChat?: boolean } | null {
-  if (input === undefined || input === null) return null;
-  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
-    return { logId: normalizeIdValue(input) };
-  }
-
-  const message = input.message || input.chatLog || input.raw?.chatLog || input;
-  const logId = normalizeIdValue(
-    input.logId ||
-      input.msgId ||
-      input.id ||
-      message?.logId ||
-      message?.msgId ||
-      message?.id ||
-      input.raw?.logId ||
-      input.raw?.msgId ||
-      input.raw?.chatLog?.logId ||
-      0
-  );
-  const linkId = input.linkId ?? message?.linkId ?? extractOpenLinkIdFromRaw(input.raw) ?? input.room?.openLinkId;
-  const isOpenChat = input.room?.isOpenChat;
-
-  return { logId, linkId, isOpenChat };
-}
-
-function normalizeOpenChatMemberTarget(
-  input: any
-): { memberId: number | string; linkId?: number | string; isOpenChat?: boolean } | null {
-  if (input === undefined || input === null) return null;
-  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
-    return { memberId: normalizeIdValue(input) };
-  }
-
-  const raw = input.raw || {};
-  const memberId = normalizeIdValue(
-    input.memberId ||
-      input.userId ||
-      input.senderId ||
-      input.authorId ||
-      input.sender?.id ||
-      raw.authorId ||
-      raw.userId ||
-      raw.senderId ||
-      raw.chatLog?.authorId ||
-      raw.chatLog?.userId ||
-      0
-  );
-  if (!memberId) return null;
-
-  const linkId = extractOpenLinkIdFromRaw(raw) ?? (input.room?.openLinkId ? normalizeIdValue(input.room.openLinkId) : undefined);
-  const isOpenChat = input.room?.isOpenChat;
-
-  return { memberId, linkId, isOpenChat };
-}
-
-function normalizeLogTarget(input: any): number | string {
-  if (input === undefined || input === null) return 0;
-  if (Long.isLong(input) || typeof input === 'number' || typeof input === 'bigint' || typeof input === 'string') {
-    return normalizeIdValue(input);
-  }
-
-  const body = input.body || input.response?.body || input.result?.body;
-  if (body?.logId) return normalizeIdValue(body.logId);
-  if (body?.chatLog?.logId) return normalizeIdValue(body.chatLog.logId);
-
-  const message = input.message || input.chatLog || input.raw?.chatLog || input;
-  const logId = normalizeIdValue(
-    input.logId ||
-      input.msgId ||
-      input.id ||
-      message?.logId ||
-      message?.msgId ||
-      message?.id ||
-      input.raw?.logId ||
-      input.raw?.msgId ||
-      input.raw?.chatLog?.logId ||
-      0
-  );
-  return logId;
-}
-
-function normalizeEditTarget(input: any): { logId: number | string; type?: number; extra?: string } | null {
-  if (!input) return null;
-  const logId = normalizeLogTarget(input);
-  if (!logId) return null;
-
-  const body = input.body || input.response?.body || input.result?.body;
-  const message = input.message || input.chatLog || input.raw?.chatLog || body?.chatLog || input;
-  const type = safeNumber(
-    message?.type || message?.msgType || input.message?.type || input.type || MessageType.Text,
-    MessageType.Text
-  );
-  const extra =
-    typeof message?.extra === 'string'
-      ? message.extra
-      : typeof message?.attachment === 'string'
-        ? message.attachment
-        : typeof message?.attachments === 'string'
-          ? message.attachments
-          : typeof input.extra === 'string'
-            ? input.extra
-            : undefined;
-
-  return { logId, type, extra };
-}
-
-function pickFirstValue<T>(...values: T[]): T | undefined {
-  for (const value of values) {
-    if (value !== undefined && value !== null && value !== '') {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function pickFirstObject(...values: any[]) {
-  for (const value of values) {
-    if (value && typeof value === 'object') {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function extractProfileFromResponse(body: any, fallbackUserId?: number | string) {
-  const root = body && typeof body === 'object' && 'result' in body ? (body as any).result : body;
-  const data = root && typeof root === 'object' && 'data' in root ? (root as any).data : root;
-  const profile = pickFirstObject(
-    data?.profile,
-    data?.profile3,
-    data?.profileInfo,
-    data?.profileData,
-    data?.userProfile
-  );
-  const user = pickFirstObject(
-    data?.user,
-    data?.friend,
-    data?.member,
-    data?.target,
-    data?.profileUser,
-    data?.profileOwner
-  );
-
-  const accessPermit = pickFirstValue(
-    data?.accessPermit,
-    user?.accessPermit,
-    profile?.accessPermit
-  );
-  const nickName = pickFirstValue(
-    data?.nickName,
-    data?.nickname,
-    user?.nickName,
-    user?.nickname,
-    profile?.nickName,
-    profile?.nickname
-  );
-  const statusMessage = pickFirstValue(
-    data?.statusMessage,
-    user?.statusMessage,
-    profile?.statusMessage
-  );
-  const profileImageUrl = pickFirstValue(
-    data?.profileImageUrl,
-    user?.profileImageUrl,
-    profile?.profileImageUrl
-  );
-  const fullProfileImageUrl = pickFirstValue(
-    data?.fullProfileImageUrl,
-    user?.fullProfileImageUrl,
-    profile?.fullProfileImageUrl,
-    profile?.originalProfileImageUrl
-  );
-
-  const resolvedUserId = pickFirstValue(
-    data?.userId,
-    data?.id,
-    user?.userId,
-    user?.id,
-    user?.talkUserId,
-    user?.targetUserId,
-    fallbackUserId
-  );
-
-  return {
-    userId: resolvedUserId,
-    nickName,
-    fullProfileImageUrl,
-    profileImageUrl,
-    statusMessage,
-    accessPermit,
-  };
-}
-
-function escapeVCardValue(value: string) {
-  return String(value)
-    .replace(/\\/g, '\\\\')
-    .replace(/\n/g, '\\n')
-    .replace(/;/g, '\\;')
-    .replace(/,/g, '\\,');
-}
-
-function buildVCard(contact: ContactPayload) {
-  const name = contact?.name ? String(contact.name) : '';
-  const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
-  const escapedName = escapeVCardValue(name);
-  lines.push(`N:;${escapedName};;;`);
-  if (escapedName) {
-    lines.push(`FN:${escapedName}`);
-  }
-  const phones: string[] = [];
-  if (contact?.phone) phones.push(String(contact.phone));
-  if (Array.isArray(contact?.phones)) {
-    for (const phone of contact.phones) {
-      if (phone) phones.push(String(phone));
-    }
-  }
-  for (const phone of phones) {
-    lines.push(`TEL;TYPE=CELL:${escapeVCardValue(phone)}`);
-  }
-  if (contact?.email) {
-    lines.push(`EMAIL:${escapeVCardValue(contact.email)}`);
-  }
-  lines.push('END:VCARD');
-  return `${lines.join('\r\n')}\r\n`;
-}
-
-function normalizeLinkAttachment(input: any) {
-  if (!input) return input;
-  if (typeof input === 'string') return input;
-  if (typeof input === 'object') {
-    if (input.attachment) return input.attachment;
-    const { text, extra, ...rest } = input;
-    if (extra && typeof extra === 'object') {
-      return { ...rest, ...extra };
-    }
-    return rest;
-  }
-  return input;
-}
-
-async function streamEncryptedFile(
-  client: CarriageClient,
-  filePath: string,
-  startOffset: number,
-  totalSize: number,
-  onProgress?: (sent: number, total: number) => void
-) {
-  const stream = fs.createReadStream(filePath, {
-    start: startOffset > 0 ? startOffset : 0,
-    highWaterMark: 64 * 1024,
-  });
-  let sent = startOffset > 0 ? startOffset : 0;
-  for await (const chunk of stream) {
-    await client.writeEncrypted(chunk as Buffer);
-    sent += (chunk as Buffer).length;
-    if (onProgress) onProgress(sent, totalSize);
-  }
-}
 
 /**
  * KakaoForge Bot - KakaoTalk bot framework (LOCO only).
@@ -4604,7 +3000,7 @@ export class KakaoForgeClient extends EventEmitter {
     chatId?: number | string
   ) {
     if (!contact || !contact.name) {
-      throw new Error('연락처 전송에는 name이 필요합니다.');
+      throw new Error('?곕씫泥??꾩넚?먮뒗 name???꾩슂?⑸땲??');
     }
 
     let filePath = contact.filePath || '';
@@ -4694,7 +3090,7 @@ export class KakaoForgeClient extends EventEmitter {
 
   async _fetchProfileAttachment(userId: number | string) {
     if (!this.oauthToken || !this.deviceUuid) {
-      throw new Error('프로필 조회에는 oauthToken/deviceUuid가 필요합니다.');
+      throw new Error('?꾨줈??議고쉶?먮뒗 oauthToken/deviceUuid媛 ?꾩슂?⑸땲??');
     }
     const idStr = String(userId);
     const candidates: string[] = [];
@@ -4708,14 +3104,14 @@ export class KakaoForgeClient extends EventEmitter {
       try {
         const res = await httpsGet(KATALK_HOST, path, this._profileHeaders());
         if (res?.status && res.status >= 400) {
-          lastError = new Error(`프로필 조회 실패: status=${res.status}`);
+          lastError = new Error(`?꾨줈??議고쉶 ?ㅽ뙣: status=${res.status}`);
           continue;
         }
         const body = res?.body;
         if (body && typeof body === 'object') {
           const status = (body as any).status;
           if (typeof status === 'number' && status !== 0) {
-            lastError = new Error(`프로필 조회 실패: ${JSON.stringify(body)}`);
+            lastError = new Error(`?꾨줈??議고쉶 ?ㅽ뙣: ${JSON.stringify(body)}`);
             continue;
           }
         }
@@ -4726,7 +3122,7 @@ export class KakaoForgeClient extends EventEmitter {
       }
     }
     if (lastError) throw lastError;
-    throw new Error('프로필 정보를 가져오지 못했습니다.');
+    throw new Error('?꾨줈???뺣낫瑜?媛?몄삤吏 紐삵뻽?듬땲??');
   }
 
   async _uploadMedia(
@@ -5245,11 +3641,11 @@ export class KakaoForgeClient extends EventEmitter {
     const unwrapped = unwrapAttachment(profile);
     const normalized = normalizeProfileAttachment(unwrapped);
     if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
-      throw new Error('카카오 프로필 전송에는 profile 정보가 필요합니다.');
+      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 profile ?뺣낫媛 ?꾩슂?⑸땲??');
     }
     const userId = (normalized as any).userId ?? (normalized as any).id;
     if (!userId) {
-      throw new Error('카카오 프로필 전송에는 userId가 필요합니다.');
+      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 userId媛 ?꾩슂?⑸땲??');
     }
 
     const hasAccessPermit = !!(normalized as any).accessPermit;
@@ -5271,7 +3667,7 @@ export class KakaoForgeClient extends EventEmitter {
       accessPermit: String((normalized as any).accessPermit || fetched?.accessPermit || ''),
     };
     if (!attachment.accessPermit) {
-      throw new Error('카카오 프로필 전송에는 accessPermit이 필요합니다.');
+      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 accessPermit???꾩슂?⑸땲??');
     }
     const fallbackText = attachment.nickName || '';
     return this._sendWithAttachment(
@@ -5331,25 +3727,25 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     if (!schedule || typeof schedule !== 'object') {
-      throw new Error('일정 전송에는 일정 정보가 필요합니다.');
+      throw new Error('?쇱젙 ?꾩넚?먮뒗 ?쇱젙 ?뺣낫媛 ?꾩슂?⑸땲??');
     }
 
     const payload = schedule as SchedulePayload;
     if (payload.eventAt === undefined || payload.eventAt === null) {
-      throw new Error('일정 전송에는 eventAt이 필요합니다.');
+      throw new Error('?쇱젙 ?꾩넚?먮뒗 eventAt???꾩슂?⑸땲??');
     }
     if (!payload.title) {
-      throw new Error('일정 전송에는 title이 필요합니다.');
+      throw new Error('?쇱젙 ?꾩넚?먮뒗 title???꾩슂?⑸땲??');
     }
 
     let eventAtDate = toDate(payload.eventAt);
     if (!eventAtDate) {
-      throw new Error('일정 전송: eventAt 형식이 올바르지 않습니다.');
+      throw new Error('?쇱젙 ?꾩넚: eventAt ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
     }
     eventAtDate = snapToFiveMinutes(eventAtDate, 'ceil');
     let endAtDate = payload.endAt ? toDate(payload.endAt) : new Date(eventAtDate.getTime() + 60 * 60 * 1000);
     if (!endAtDate) {
-      throw new Error('일정 전송: endAt 형식이 올바르지 않습니다.');
+      throw new Error('?쇱젙 ?꾩넚: endAt ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
     }
     endAtDate = snapToFiveMinutes(endAtDate, 'ceil');
     if (endAtDate.getTime() <= eventAtDate.getTime()) {
@@ -5358,7 +3754,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     const chatIdNum = safeNumber(chatId, 0);
     if (!chatIdNum) {
-      throw new Error('일정 전송: chatId가 필요합니다.');
+      throw new Error('?쇱젙 ?꾩넚: chatId媛 ?꾩슂?⑸땲??');
     }
 
     const calendar = this._getCalendarClient();
@@ -5414,17 +3810,17 @@ export class KakaoForgeClient extends EventEmitter {
     };
 
     const createRes = await runCalendar(() => calendar.createEvent(addEvent, { referer }));
-    assertCalendarOk(createRes, '일정 생성');
+    assertCalendarOk(createRes, '?쇱젙 ?앹꽦');
     const eId = extractEventId(createRes?.body);
     if (!eId) {
-      throw new Error('일정 생성 실패: eId 없음');
+      throw new Error('?쇱젙 ?앹꽦 ?ㅽ뙣: eId ?놁쓬');
     }
 
     const connectRes = await runCalendar(() => calendar.connectEvent(eId, chatIdNum, referer));
-    assertCalendarOk(connectRes, '일정 연결');
+    assertCalendarOk(connectRes, '?쇱젙 ?곌껐');
 
     const shareRes = await runCalendar(() => calendar.shareMessage(eId, referer));
-    assertCalendarOk(shareRes, '일정 공유');
+    assertCalendarOk(shareRes, '?쇱젙 怨듭쑀');
     let attachment = extractShareMessageData(shareRes?.body);
     attachment = normalizeScheduleShareData(attachment);
     if (this.debug) {
@@ -5549,7 +3945,7 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const res = await bubble.sendReaction(resolvedChatId, payload);
-    assertBubbleOk(res, '공감 전송');
+    assertBubbleOk(res, '怨듦컧 ?꾩넚');
     return res;
   }
 
@@ -5591,7 +3987,7 @@ export class KakaoForgeClient extends EventEmitter {
     return await this._carriage.kickMem({
       linkId: linkIdValue,
       chatId: resolvedChatId,
-      memberId: targetInfo.memberId,
+      memberId: normalizeIdValue(targetInfo.memberId),
       reported: !!opts.report,
     });
   }
