@@ -120,6 +120,7 @@ export class KakaoForgeClient extends EventEmitter {
   _locoAutoConnectAttempted: boolean;
   _chatRooms: Map<string, ChatRoomInfo>;
   _chatIdAliases: Map<string, string>;
+  _logIdAliases: Map<string, string>;
   _openChatInitInFlight: Map<string, Promise<void>>;
   _openChatInitialized: Set<string>;
   _chatInfoInFlight: Map<string, Promise<void>>;
@@ -233,6 +234,7 @@ export class KakaoForgeClient extends EventEmitter {
     this._locoAutoConnectAttempted = false;
     this._chatRooms = new Map();
     this._chatIdAliases = new Map();
+    this._logIdAliases = new Map();
     this._openChatInitInFlight = new Map();
     this._openChatInitialized = new Set();
     this._chatInfoInFlight = new Map();
@@ -310,9 +312,56 @@ export class KakaoForgeClient extends EventEmitter {
   }
 
   _resolveChatId(chatId: number | string) {
+    if (typeof chatId === 'number' && !Number.isSafeInteger(chatId)) {
+      const approx = String(chatId);
+      const aliased = this._chatIdAliases.get(approx);
+      if (aliased) return aliased;
+      // Fallback to approximate string instead of throwing
+      return approx;
+    }
     const normalized = normalizeIdValue(chatId);
     const key = String(normalized);
     return this._chatIdAliases.get(key) || normalized;
+  }
+
+  _recordLogAlias(logIdValue: number | string) {
+  _recordLogAlias(chatId: number | string, logIdValue: number | string) {
+    const idStr = typeof logIdValue === 'string' ? logIdValue : String(logIdValue);
+    if (!/^\d+$/.test(idStr)) return;
+    if (idStr.length < 16) return;
+    const approx = safeNumber(idStr, 0);
+    if (!approx) return;
+    const approxStr = String(approx);
+    const chatKey = String(normalizeIdValue(chatId));
+    const aliasKey = `${chatKey}:${approxStr}`;
+    if (approxStr !== idStr) {
+      // LRU eviction: limit map size to 10000 entries
+      if (this._logIdAliases.size >= 10000) {
+        const firstKey = this._logIdAliases.keys().next().value;
+        if (firstKey) this._logIdAliases.delete(firstKey);
+      }
+      this._logIdAliases.set(approxStr, idStr);
+    }
+  }
+
+  _resolveLogId(chatId: number | string, logId: number | string) {
+    const chatKey = String(normalizeIdValue(chatId));
+    if (typeof logId === 'number' && !Number.isSafeInteger(logId)) {
+      const approx = String(logId);
+      const aliasKey = `${chatKey}:${approx}`;
+      const aliased = this._logIdAliases.get(aliasKey);
+      if (aliased) return aliased;
+      // If the unsafe integer's string representation is a plain digit string,
+      // treat that as the normalized logId instead of forcing callers to pass a string.
+      if (/^\d+$/.test(approx)) {
+        return approx;
+      }
+      throw new Error('logId exceeds Number.MAX_SAFE_INTEGER. Pass logId as string.');
+    }
+    const normalized = normalizeIdValue(logId);
+    const key = String(normalized);
+    const aliasKey = `${chatKey}:${key}`;
+    return this._logIdAliases.get(aliasKey) || normalized;
   }
 
   async _ensureChatInfo(chatId: number | string) {
@@ -1631,6 +1680,7 @@ export class KakaoForgeClient extends EventEmitter {
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
     const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
     const logIdNumeric = safeNumber(logIdValue, 0);
+    this._recordLogAlias(logIdValue);
     const attachmentsRaw = parseAttachments(
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
@@ -2370,7 +2420,7 @@ export class KakaoForgeClient extends EventEmitter {
    * Fetch a specific message via LOCO (GETMSGS) and build MessageEvent.
    */
   async fetchMessage(chatId: number | string, logId: number | string) {
-    const normalizedLogId = normalizeIdValue(logId);
+    const normalizedLogId = this._resolveLogId(logId);
     if (!normalizedLogId || normalizedLogId === 0 || normalizedLogId === '0') {
       throw new Error('fetchMessage requires logId');
     }
@@ -2392,6 +2442,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     const resolvedChatId = this._resolveChatId(chatId);
     this._recordChatAlias(resolvedChatId);
+    this._recordLogAlias(normalizedLogId);
     const res = await this._carriage.getMsgs([resolvedChatId], [normalizedLogId]);
     const body = res?.body || {};
     const logs =
