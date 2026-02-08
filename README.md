@@ -20,9 +20,9 @@
 > 다른 언어로 된 문서가 필요하신가요? 아래 표를 확인해 주세요.
 
 | 언어 | 위치 |
-| ---- | --- | 
-| Korean | README.md |
-| English | docs/README-en.md |
+| ---- | --- |
+| Korean | [README.md](README.md) |
+| English | [docs/README-en.md](docs/README-en.md) |
 
 ## 목차
 
