@@ -1,4 +1,4 @@
-﻿import { EventEmitter } from 'events';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -25,358 +25,97 @@ import {
   DEFAULT_QR_MODEL_NAME,
 } from './auth/login';
 import { nextClientMsgId } from './util/client-msg-id';
-import { MessageType, type MessageTypeValue } from './types/message';
-import { Reactions, type ReactionTypeValue } from './types/reaction';
-import { type MemberTypeValue } from './types/member-type';
 import { guessMime, readImageSize } from './util/media';
 import { uploadMultipartFile } from './net/upload-client';
 
-export type TransportMode = 'loco' | null;
+// Import types from centralized type modules
+import {
+  MessageType,
+  type MessageTypeValue,
+  Reactions,
+  type ReactionTypeValue,
+  type MemberTypeValue,
+  type TransportMode,
+  type MessageEvent,
+  type MemberAction,
+  type MemberEvent,
+  type DeleteEvent,
+  type HideEvent,
+  type SendOptions,
+  type ReplyTarget,
+  type ReplyOptions,
+  type ReactionOptions,
+  type MentionInput,
+  type SpoilerInput,
+  type OpenChatKickOptions,
+  type OpenChatBlindOptions,
+  type EditMessageOptions,
+  type AttachmentInput,
+  type AttachmentSendOptions,
+  type VideoQuality,
+  type VideoTranscodeOptions,
+  type UploadMediaType,
+  type UploadOptions,
+  type UploadResult,
+  type LocationPayload,
+  type SchedulePayload,
+  type ContactPayload,
+  type ProfilePayload,
+  type LinkPayload,
+  type KakaoForgeConfig,
+  type AuthFile,
+  type AuthPayload,
+  type ChatModule,
+  type ChatRoomInfo,
+  type ChatListCursor,
+  type MessageHandler,
+  type MemberEventHandler,
+  type DeleteEventHandler,
+  type HideEventHandler,
+  type MemberNameCache,
+} from './types';
 
-export type MessageEvent = {
-  message: {
-    id: number | string;
-    text: string;
-    type: number;
-    logId: number | string;
-  };
-  attachmentsRaw: any[];
-  sender: {
-    id: number | string;
-    name: string;
-    type: MemberTypeValue;
-  };
-  room: {
-    id: number | string;
-    name: string;
-    isGroupChat: boolean;
-    isOpenChat: boolean;
-    openLinkId?: number | string;
-  };
-  raw: any;
-  // Legacy aliases for compatibility
-  chatId: number | string;
-  senderId: number | string;
-  text: string;
-  type: number;
-  logId: number | string;
-};
-
-export type MemberAction = 'join' | 'leave' | 'invite' | 'kick';
-
-export type MemberEvent = {
-  type: MemberAction;
-  room: MessageEvent['room'];
-  actor?: MessageEvent['sender'];
-  member?: {
-    ids: Array<number | string>;
-    names: string[];
-  };
-  members?: MessageEvent['sender'][];
-  message?: MessageEvent;
-  raw: any;
-};
-
-export type DeleteEvent = {
-  type: 'delete';
-  room: MessageEvent['room'];
-  actor: MessageEvent['sender'];
-  member: {
-    ids: Array<number | string>;
-    names: string[];
-  };
-  members: MessageEvent['sender'][];
-  message: {
-    id: number | string;
-    logId: number | string;
-  };
-  raw: any;
-  // Legacy aliases for compatibility
-  chatId: number | string;
-  logId: number | string;
-};
-
-export type HideEvent = {
-  type: 'hide';
-  room: MessageEvent['room'];
-  actor: MessageEvent['sender'];
-  member: {
-    ids: Array<number | string>;
-    names: string[];
-  };
-  members: MessageEvent['sender'][];
-  message: {
-    id: number | string;
-    logId: number | string;
-  };
-  category?: string;
-  report?: boolean;
-  hidden?: boolean;
-  coverType?: string;
-  feedType?: number;
-  raw: any;
-  // Legacy aliases for compatibility
-  chatId: number | string;
-  logId: number | string;
-};
+// Re-export types for external consumers
+export {
+  MessageType,
+  type MessageTypeValue,
+  Reactions,
+  type ReactionTypeValue,
+  type TransportMode,
+  type MessageEvent,
+  type MemberAction,
+  type MemberEvent,
+  type DeleteEvent,
+  type HideEvent,
+  type SendOptions,
+  type ReplyTarget,
+  type ReplyOptions,
+  type ReactionOptions,
+  type MentionInput,
+  type SpoilerInput,
+  type OpenChatKickOptions,
+  type OpenChatBlindOptions,
+  type EditMessageOptions,
+  type AttachmentInput,
+  type AttachmentSendOptions,
+  type VideoQuality,
+  type VideoTranscodeOptions,
+  type UploadMediaType,
+  type UploadOptions,
+  type UploadResult,
+  type LocationPayload,
+  type SchedulePayload,
+  type ContactPayload,
+  type ProfilePayload,
+  type LinkPayload,
+  type KakaoForgeConfig,
+  type AuthPayload,
+  type ChatModule,
+} from './types';
 
 export { MemberType } from './types/member-type';
 export type { MemberTypeValue } from './types/member-type';
 export type MemberType = MemberTypeValue;
-
-export type SendOptions = {
-  msgId?: number;
-  noSeen?: boolean;
-  supplement?: string;
-  from?: string;
-  extra?: string;
-  scope?: number;
-  sendToChatRoom?: boolean;
-  threadId?: number | string | Long;
-  featureStat?: string;
-  silence?: boolean;
-  isSilence?: boolean;
-  type?: number;
-  mentions?: MentionInput[];
-  spoilers?: SpoilerInput[];
-};
-
-export type ReplyTarget = {
-  logId: number | string;
-  userId: number | string;
-  text?: string;
-  type?: number;
-  linkId?: number | string;
-  isOpenChat?: boolean;
-  mentions?: any[];
-};
-
-export type ReplyOptions = SendOptions & {
-  attachOnly?: boolean;
-  attachType?: number;
-};
-
-export type ReactionOptions = {
-  linkId?: number | string;
-  reqId?: number | string;
-};
-
-export type MentionInput = {
-  userId?: number | string;
-  user_id?: number | string;
-  id?: number | string;
-  at?: number[] | number;
-  len?: number;
-  length?: number;
-  text?: string;
-  name?: string;
-  nickname?: string;
-  nickName?: string;
-};
-
-export type SpoilerInput = {
-  loc?: number;
-  len?: number;
-  length?: number;
-  start?: number;
-  end?: number;
-};
-
-
-export type OpenChatKickOptions = {
-  linkId?: number | string;
-  report?: boolean;
-};
-
-export type OpenChatBlindOptions = OpenChatKickOptions & {
-  chatLogInfo?: string;
-  category?: string;
-};
-
-export type EditMessageOptions = {
-  type?: number;
-  extra?: string | Record<string, any> | any[];
-  supplement?: string;
-};
-
-export type AttachmentInput = Record<string, any> | any[] | string | UploadResult | { attachment: any };
-
-export type AttachmentSendOptions = SendOptions & UploadOptions & {
-  text?: string;
-};
-
-
-
-export type VideoQuality = 'low' | 'high';
-
-export type VideoTranscodeOptions = {
-  transcode?: boolean;
-  videoQuality?: VideoQuality;
-  ffmpegPath?: string;
-  ffprobePath?: string;
-  tempDir?: string;
-  keepTemp?: boolean;
-  videoBitrate?: number;
-  videoResolution?: number;
-};
-
-export type UploadMediaType = 'photo' | 'video' | 'audio' | 'file';
-
-export type UploadOptions = {
-  chatId?: number | string;
-  msgId?: number;
-  noSeen?: boolean;
-  scope?: number;
-  threadId?: number | string | Long;
-  sendToChatRoom?: boolean;
-  supplement?: string;
-  featureStat?: string;
-  silence?: boolean;
-  isSilence?: boolean;
-  extra?: string;
-  uploadUrl?: string;
-  headers?: Record<string, string>;
-  fields?: Record<string, any>;
-  fieldName?: string;
-  filename?: string;
-  name?: string;
-  mime?: string;
-  width?: number;
-  height?: number;
-  duration?: number;
-  timeoutMs?: number;
-  onProgress?: (sent: number, total: number) => void;
-  auth?: boolean;
-  transcode?: boolean;
-  videoQuality?: VideoQuality;
-  ffmpegPath?: string;
-  ffprobePath?: string;
-  tempDir?: string;
-  keepTemp?: boolean;
-  videoBitrate?: number;
-  videoResolution?: number;
-};
-
-export type UploadResult = {
-  accessKey: string;
-  attachment: Record<string, any>;
-  msgId?: number;
-  info?: any;
-  raw: any;
-  chatLog?: any;
-  complete?: any;
-};
-
-export type LocationPayload = {
-  lat: number;
-  lng: number;
-  address?: string;
-  title?: string;
-  isCurrent?: boolean;
-  placeId?: number | string;
-  extra?: Record<string, any>;
-};
-
-export type SchedulePayload = {
-  eventAt: number | Date;
-  endAt?: number | Date;
-  title: string;
-  location?: string | Record<string, any>;
-  allDay?: boolean;
-  members?: Array<number | string>;
-  timeZone?: string;
-  referer?: string;
-  postId?: number | string;
-  scheduleId?: number | string;
-  subtype?: number;
-  alarmAt?: number | Date;
-  extra?: Record<string, any>;
-};
-
-export type ContactPayload = {
-  name: string;
-  phone?: string;
-  phones?: string[];
-  email?: string;
-  vcard?: string;
-  url?: string;
-  path?: string;
-  filePath?: string;
-  extra?: Record<string, any>;
-};
-
-export type ProfilePayload = {
-  userId: number | string;
-  nickName?: string;
-  fullProfileImageUrl?: string;
-  profileImageUrl?: string;
-  statusMessage?: string;
-  accessPermit?: string;
-  extra?: Record<string, any>;
-};
-
-export type LinkPayload = {
-  url?: string;
-  text?: string;
-  attachment?: AttachmentInput;
-  extra?: Record<string, any>;
-};
-
-export type KakaoForgeConfig = {
-  userId?: number;
-  oauthToken?: string;
-  deviceUuid?: string;
-  authPath?: string;
-  autoConnect?: boolean;
-  autoReconnect?: boolean;
-  sendIntervalMs?: number;
-  reconnectMinDelayMs?: number;
-  reconnectMaxDelayMs?: number;
-  memberCacheTtlMs?: number;
-  memberRefreshIntervalMs?: number;
-  memberLookupTimeoutMs?: number;
-  pingIntervalMs?: number;
-  socketKeepAliveMs?: number;
-  timeZone?: string;
-  hasAccount?: string | boolean;
-  adid?: string;
-  dtype?: string | number;
-  deviceId?: string;
-  os?: string;
-  appVer?: string;
-  lang?: string;
-  mccmnc?: string;
-  MCCMNC?: string;
-  ntype?: number;
-  networkType?: number;
-  refreshToken?: string;
-  debug?: boolean;
-  debugGetConf?: boolean;
-  videoQuality?: VideoQuality;
-  transcodeVideos?: boolean;
-  ffmpegPath?: string;
-  ffprobePath?: string;
-  feedTypeMap?: Record<number, MemberAction>;
-};
-
-type AuthFile = {
-  userId?: number | string;
-  accessToken?: string;
-  oauthToken?: string;
-  deviceUuid?: string;
-  refreshToken?: string;
-  savedAt?: string;
-};
-
-export type AuthPayload = {
-  userId: number | string;
-  accessToken: string;
-  refreshToken?: string;
-  deviceUuid: string;
-  savedAt?: string;
-  authPath?: string;
-  raw?: any;
-};
 
 function loadAuthFile(authPath: string): AuthFile {
   if (!fs.existsSync(authPath)) {
@@ -393,76 +132,6 @@ function loadAuthFile(authPath: string): AuthFile {
 function sleepMs(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-export type ChatModule = {
-  sendText: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
-  sendReply: (chatId: number | string, text: string, replyTo: ReplyTarget | MessageEvent | any, opts?: ReplyOptions) => Promise<any>;
-  sendThreadReply: (chatId: number | string, threadId: number | string, text: string, opts?: SendOptions) => Promise<any>;
-  sendReaction: (chatId: number | string, target: any, reactionType: ReactionTypeValue, opts?: ReactionOptions) => Promise<any>;
-  openChatKick: (chatId: number | string, target: any, opts?: OpenChatKickOptions) => Promise<any>;
-  openChatBlind: (chatId: number | string, target: any, opts?: OpenChatBlindOptions) => Promise<any>;
-  fetchMessage: (chatId: number | string, logId: number | string) => Promise<MessageEvent>;
-  fetchMessagesByUser: (
-    chatId: number | string,
-    userId: number | string,
-    opts?: { since?: number | string; max?: number | string; count?: number; limit?: number; maxPages?: number }
-  ) => Promise<MessageEvent[]>;
-  getUsernameById: (chatId: number | string, userId: number | string) => Promise<string>;
-  deleteMessage: (chatId: number | string, target: any) => Promise<any>;
-  editMessage: (chatId: number | string, target: any, text: string, opts?: EditMessageOptions) => Promise<any>;
-  send: (chatId: number | string, text: string, opts?: SendOptions) => Promise<any>;
-  mention: (userId: number | string, nameOrChatId?: string | number, chatId?: number | string) => string;
-  spoiler: (text: string) => string;
-  uploadPhoto: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
-  uploadVideo: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
-  uploadAudio: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
-  uploadFile: (filePath: string, opts?: UploadOptions) => Promise<UploadResult>;
-  sendPhoto: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendVideo: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendAudio: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendFile: (chatId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendPhotoAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendVideoAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendAudioAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendFileAtThread: (chatId: number | string, threadId: number | string, attachment: AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendContact: (chatId: number | string, contact: ContactPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendKakaoProfile: (chatId: number | string, profile: ProfilePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  sendLink: (chatId: number | string, link: string | LinkPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
-  type?: MemberTypeValue;
-};
-
-type ChatRoomInfo = {
-  chatId?: number | string;
-  type?: string;
-  title?: string;
-  roomName?: string;
-  displayMembers?: any[];
-  isGroupChat?: boolean;
-  isOpenChat?: boolean;
-  openLinkId?: number | string;
-  openChatId?: number | string;
-  li?: number | string;
-  openToken?: number;
-  directChat?: boolean;
-  needsTitle?: boolean;
-  lastChatLogId?: number;
-  lastSeenLogId?: number;
-  lastLogId?: number;
-};
-
-type ChatListCursor = {
-  lastTokenId: number | string;
-  lastChatId: number | string;
-};
-
-type MessageHandler = ((chat: ChatModule, msg: MessageEvent) => void) | ((msg: MessageEvent) => void);
-type MemberEventHandler = ((chat: ChatModule, evt: MemberEvent) => void) | ((evt: MemberEvent) => void);
-type DeleteEventHandler = ((chat: ChatModule, evt: DeleteEvent) => void) | ((evt: DeleteEvent) => void);
-type HideEventHandler = ((chat: ChatModule, evt: HideEvent) => void) | ((evt: HideEvent) => void);
-
-type MemberNameCache = Map<string, Map<string, string>>;
 
 function uniqueStrings(list) {
   if (!Array.isArray(list)) return [];
@@ -6206,9 +5875,4 @@ export function Spoiler(text: string) {
 
 export const KakaoBot = KakaoForgeClient;
 
-export { MessageType } from './types/message';
-export { Reactions } from './types/reaction';
-
-export type { MessageTypeValue } from './types/message';
-export type { ReactionTypeValue } from './types/reaction';
 export type KakaoBot = KakaoForgeClient;
