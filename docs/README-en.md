@@ -21,8 +21,8 @@ A Node.js bot library built on the KakaoTalk LOCO protocol.
 
 | Lang | Loc |
 | ---- | --- | 
-| Korean   | [README.md](README.md) |
-| English   | [docs/README-en.md](docs/README-en.md) |
+| Korean   | [README.md](../README.md) |
+| English   | [README-en.md](./README-en.md) |
 
 ## Table of Contents
 
