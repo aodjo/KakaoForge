@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { CarriageClient } from '../net/carriage-client';
+import type { CarriageClient } from '../net/carriage-client';
 
 export function buildQrLoginHandlers() {
   let qrcode: any = null;
