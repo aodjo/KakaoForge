@@ -24,7 +24,6 @@ import {
 } from '../auth/login';
 import { nextClientMsgId } from '../util/client-msg-id';
 import { guessMime, readImageSize } from '../util/media';
-import { uploadMultipartFile } from '../net/upload-client';
 
 // Import utilities from centralized utility modules
 import {
