@@ -1437,22 +1437,20 @@ export class KakaoForgeClient extends EventEmitter {
         feedType: typeof messageJson?.feedType === 'number' ? messageJson.feedType : undefined,
       };
 
-      if (logIdValue && roomIdValue) {
-        try {
-          const targetMsg = await this.fetchMessage(roomIdValue, logIdValue);
-          const targetSender = targetMsg?.sender;
-          if (targetSender?.id) {
-            const ref = this._buildMemberRef(roomIdValue, targetSender.id, targetSender.name);
-            hideEvent.member = { ids: [ref.id], names: [ref.name] };
-            hideEvent.members = [ref];
-          }
-        } catch (err) {
-          if (this.debug) {
-            console.error(
-              '[DBG] hide fetchMessage failed:',
-              err instanceof Error ? err.message : String(err)
-            );
-          }
+      try {
+        const targetMsg = await this.fetchMessage(roomIdValue, logIdValue);
+        const targetSender = targetMsg?.sender;
+        if (targetSender?.id) {
+          const ref = this._buildMemberRef(roomIdValue, targetSender.id, targetSender.name);
+          hideEvent.member = { ids: [ref.id], names: [ref.name] };
+          hideEvent.members = [ref];
+        }
+      } catch (err) {
+        if (this.debug) {
+          console.error(
+            '[DBG] hide fetchMessage failed:',
+            err instanceof Error ? err.message : String(err)
+          );
         }
       }
 
