@@ -234,7 +234,7 @@ if (client.type === MemberType.OpenChat.Owner ||
 }
 ```
 
-### 메시지 조회 (테스트 되지 않음)
+### 메시지 조회
 
 ```javascript
 // 특정 메시지 조회
@@ -525,7 +525,7 @@ await chat.editMessage(roomId, prevMsg, '수정된 내용');
 await chat.deleteMessage(roomId, msg);
 ```
 
-#### `chat.fetchMessage(roomId, logId)` *(테스트되지 않음)*
+#### `chat.fetchMessage(roomId, logId)`
 
 특정 메시지를 조회합니다.
 
@@ -533,7 +533,7 @@ await chat.deleteMessage(roomId, msg);
 const message = await chat.fetchMessage(roomId, logId);
 ```
 
-#### `chat.fetchMessagesByUser(roomId, userId, options)` *(테스트되지 않음)*
+#### `chat.fetchMessagesByUser(roomId, userId, options)`
 
 특정 사용자의 메시지를 조회합니다.
 
