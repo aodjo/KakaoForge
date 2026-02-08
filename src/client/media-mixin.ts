@@ -1,4 +1,4 @@
-import * as fs from 'fs';
+﻿import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as LosslessJSON from 'lossless-json';
@@ -327,7 +327,7 @@ function _profileHeaders(this: KakaoForgeClient, extra: Record<string, string> =
 
 async function _fetchProfileAttachment(this: KakaoForgeClient, userId: number | string) {
     if (!this.oauthToken || !this.deviceUuid) {
-      throw new Error('?꾨줈??議고쉶?먮뒗 oauthToken/deviceUuid媛 ?꾩슂?⑸땲??');
+      throw new Error('Profile lookup requires oauthToken/deviceUuid');
     }
     const idStr = String(userId);
     const candidates: string[] = [];
@@ -341,14 +341,14 @@ async function _fetchProfileAttachment(this: KakaoForgeClient, userId: number | 
       try {
         const res = await httpsGet(KATALK_HOST, path, this._profileHeaders());
         if (res?.status && res.status >= 400) {
-          lastError = new Error(`?꾨줈??議고쉶 ?ㅽ뙣: status=${res.status}`);
+          lastError = new Error(`Profile lookup failed: status=${res.status}`);
           continue;
         }
         const body = res?.body;
         if (body && typeof body === 'object') {
           const status = (body as any).status;
           if (typeof status === 'number' && status !== 0) {
-            lastError = new Error(`?꾨줈??議고쉶 ?ㅽ뙣: ${JSON.stringify(body)}`);
+            lastError = new Error(`Profile lookup failed: ${JSON.stringify(body)}`);
             continue;
           }
         }
@@ -359,7 +359,7 @@ async function _fetchProfileAttachment(this: KakaoForgeClient, userId: number | 
       }
     }
     if (lastError) throw lastError;
-    throw new Error('?꾨줈???뺣낫瑜?媛?몄삤吏 紐삵뻽?듬땲??');
+    throw new Error('Failed to fetch profile info');
   }
 
 async function _uploadMedia(this: KakaoForgeClient, 
@@ -835,11 +835,11 @@ async function sendKakaoProfile(this: KakaoForgeClient, chatId: number | string,
     const unwrapped = unwrapAttachment(profile);
     const normalized = normalizeProfileAttachment(unwrapped);
     if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
-      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 profile ?뺣낫媛 ?꾩슂?⑸땲??');
+      throw new Error('sendKakaoProfile requires profile info');
     }
     const userId = (normalized as any).userId ?? (normalized as any).id;
     if (!userId) {
-      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 userId媛 ?꾩슂?⑸땲??');
+      throw new Error('sendKakaoProfile requires userId');
     }
 
     const hasAccessPermit = !!(normalized as any).accessPermit;
@@ -861,7 +861,7 @@ async function sendKakaoProfile(this: KakaoForgeClient, chatId: number | string,
       accessPermit: String((normalized as any).accessPermit || fetched?.accessPermit || ''),
     };
     if (!attachment.accessPermit) {
-      throw new Error('移댁뭅???꾨줈???꾩넚?먮뒗 accessPermit???꾩슂?⑸땲??');
+      throw new Error('sendKakaoProfile requires accessPermit');
     }
     const fallbackText = attachment.nickName || '';
     return this._sendWithAttachment(
@@ -948,7 +948,7 @@ async function sendSchedule(this: KakaoForgeClient, chatId: number | string, sch
 
     const chatIdNum = safeNumber(chatId, 0);
     if (!chatIdNum) {
-      throw new Error('?쇱젙 ?꾩넚: chatId媛 ?꾩슂?⑸땲??');
+      throw new Error('sendSchedule requires chatId');
     }
 
     const calendar = this._getCalendarClient();
