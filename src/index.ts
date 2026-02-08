@@ -329,6 +329,7 @@ export type KakaoForgeConfig = {
   authPath?: string;
   autoConnect?: boolean;
   autoReconnect?: boolean;
+  sendIntervalMs?: number;
   reconnectMinDelayMs?: number;
   reconnectMaxDelayMs?: number;
   memberCacheTtlMs?: number;
@@ -387,6 +388,10 @@ function loadAuthFile(authPath: string): AuthFile {
   } catch (err) {
     throw new Error(`Invalid auth.json at ${authPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+function sleepMs(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export type ChatModule = {
@@ -2184,6 +2189,7 @@ export class KakaoForgeClient extends EventEmitter {
   type: MemberTypeValue;
   chat: ChatModule;
   autoReconnect: boolean;
+  sendIntervalMs: number;
   reconnectMinDelayMs: number;
   reconnectMaxDelayMs: number;
   memberCacheTtlMs: number;
@@ -2234,6 +2240,8 @@ export class KakaoForgeClient extends EventEmitter {
   _reconnectTimer: NodeJS.Timeout | null;
   _reconnectAttempt: number;
   _disconnectRequested: boolean;
+  _sendQueue: Promise<void>;
+  _lastSendAt: number;
 
   constructor(config: KakaoForgeConfig = {}) {
     super();
@@ -2270,6 +2278,10 @@ export class KakaoForgeClient extends EventEmitter {
     this.type = 0;
 
     this.autoReconnect = config.autoReconnect !== false;
+    this.sendIntervalMs = 400;
+    if (typeof config.sendIntervalMs === 'number') {
+      this.sendIntervalMs = config.sendIntervalMs;
+    }
     this.reconnectMinDelayMs = typeof config.reconnectMinDelayMs === 'number'
       ? config.reconnectMinDelayMs
       : 1000;
@@ -2341,6 +2353,8 @@ export class KakaoForgeClient extends EventEmitter {
     this._reconnectTimer = null;
     this._reconnectAttempt = 0;
     this._disconnectRequested = false;
+    this._sendQueue = Promise.resolve();
+    this._lastSendAt = 0;
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
@@ -4616,6 +4630,30 @@ export class KakaoForgeClient extends EventEmitter {
     return cached || '';
   }
 
+  async _enqueueSend<T>(task: () => Promise<T>) {
+    const prev = this._sendQueue;
+    const interval = this.sendIntervalMs;
+    const next = prev
+      .catch(() => {})
+      .then(async () => {
+        if (interval > 0) {
+          const now = Date.now();
+          let waitMs = this._lastSendAt + interval - now;
+          if (waitMs < 0) waitMs = 0;
+          if (waitMs > 0) {
+            await sleepMs(waitMs);
+          }
+        }
+        this._lastSendAt = Date.now();
+        return task();
+      });
+    this._sendQueue = next.then(
+      () => {},
+      () => {}
+    );
+    return next;
+  }
+
   /**
    * Send a text message to a chatroom (LOCO WRITE).
    */
@@ -4687,7 +4725,12 @@ export class KakaoForgeClient extends EventEmitter {
     }
 
     const resolvedChatId = this._resolveChatId(chatId);
-    return await this._carriage.write(resolvedChatId, messageText, msgType, writeOpts);
+    return await this._enqueueSend(() => {
+      if (!this._carriage) {
+        throw new Error('LOCO not connected. Call client.connect() first.');
+      }
+      return this._carriage.write(resolvedChatId, messageText, msgType, writeOpts);
+    });
   }
 
   /**

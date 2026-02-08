@@ -79,6 +79,7 @@ const client = createClient({
     debug: true,                  // 디버그 로깅 활성화 (기본: false)
     autoConnect: true,            // 자동 연결 (기본: true)
     autoReconnect: true,          // 연결 끊김 시 자동 재연결 (기본: true)
+    sendIntervalMs: 400,          // 메시지 전송 간격 제한 (기본: 400ms)
     pingIntervalMs: 60000,        // Ping 간격 (기본: 60초)
 });
 ```
@@ -281,6 +282,7 @@ const client = createClient({
     debug: true,
     autoConnect: true,
     autoReconnect: true,
+    sendIntervalMs: 400,
 });
 ```
 
@@ -581,6 +583,7 @@ interface KakaoForgeConfig {
     // 연결
     autoConnect?: boolean;       // 자동 연결 (기본: true)
     autoReconnect?: boolean;     // 자동 재연결 (기본: true)
+    sendIntervalMs?: number;     // 메시지 전송 간격 제한 (기본: 400)
     reconnectMinDelayMs?: number; // 재연결 최소 대기 시간
     reconnectMaxDelayMs?: number; // 재연결 최대 대기 시간
 
@@ -763,6 +766,11 @@ client.onMessage(async (chat, msg) => {
 
 - 봇은 자동으로 Ping을 전송하여 연결을 유지합니다.
 - 연결이 끊어지면 `autoReconnect` 옵션에 따라 자동 재연결을 시도합니다.
+
+### 메시지 전송 속도 제한
+
+- LOCO 서버는 짧은 시간에 연속 전송 시 `status: -303`으로 WRITE를 거부할 수 있습니다.
+- 라이브러리는 기본적으로 `sendIntervalMs`(기본 400ms) 간격으로 전송 큐를 처리합니다.
 
 ### 미디어 전송
 
