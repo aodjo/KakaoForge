@@ -316,7 +316,8 @@ export class KakaoForgeClient extends EventEmitter {
       const approx = String(chatId);
       const aliased = this._chatIdAliases.get(approx);
       if (aliased) return aliased;
-      throw new Error('chatId exceeds Number.MAX_SAFE_INTEGER. Pass chatId as string.');
+      // Fallback to approximate string instead of throwing
+      return approx;
     }
     const normalized = normalizeIdValue(chatId);
     const key = String(normalized);
@@ -340,7 +341,8 @@ export class KakaoForgeClient extends EventEmitter {
       const approx = String(logId);
       const aliased = this._logIdAliases.get(approx);
       if (aliased) return aliased;
-      throw new Error('logId exceeds Number.MAX_SAFE_INTEGER. Pass logId as string.');
+      // Fallback to approximate string instead of throwing
+      return approx;
     }
     const normalized = normalizeIdValue(logId);
     const key = String(normalized);
