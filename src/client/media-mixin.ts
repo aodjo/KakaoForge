@@ -1,8 +1,6 @@
 ﻿import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import * as LosslessJSON from 'lossless-json';
-import { Long } from 'bson';
 import { BookingClient } from '../net/booking-client';
 import { CarriageClient } from '../net/carriage-client';
 import { uploadMultipartFile } from '../net/upload-client';
@@ -32,9 +30,6 @@ import {
   toLong,
   safeNumber,
   sha1FileHex,
-  stringifyLossless,
-  normalizeIdValue,
-  toUnixSeconds,
   toDate,
   snapToFiveMinutes,
   formatCalendarDate,
@@ -43,7 +38,6 @@ import {
   resolveFfmpegBinary,
   assertBinaryAvailable,
   probeVideo,
-  toEven,
   computeTargetVideoSize,
   runProcess,
   hasTrailerProfile,
@@ -58,7 +52,6 @@ import {
   normalizeLinkAttachment,
   unwrapAttachment,
   ensureScheduleAttachment,
-  escapeVCardValue,
   buildVCard,
   streamEncryptedFile,
   parseAttachments,
