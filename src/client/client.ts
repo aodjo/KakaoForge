@@ -324,7 +324,6 @@ export class KakaoForgeClient extends EventEmitter {
     return this._chatIdAliases.get(key) || normalized;
   }
 
-  _recordLogAlias(logIdValue: number | string) {
   _recordLogAlias(chatId: number | string, logIdValue: number | string) {
     const idStr = typeof logIdValue === 'string' ? logIdValue : String(logIdValue);
     if (!/^\d+$/.test(idStr)) return;
@@ -1680,7 +1679,7 @@ export class KakaoForgeClient extends EventEmitter {
     const type = safeNumber(chatLog.type || chatLog.msgType || 1, 1);
     const logIdValue = normalizeIdValue(chatLog.logId || chatLog.msgId || 0);
     const logIdNumeric = safeNumber(logIdValue, 0);
-    this._recordLogAlias(logIdValue);
+    this._recordLogAlias(roomIdValue, logIdValue);
     const attachmentsRaw = parseAttachments(
       chatLog.attachment ?? chatLog.attachments ?? chatLog.extra ?? null
     );
@@ -2420,7 +2419,7 @@ export class KakaoForgeClient extends EventEmitter {
    * Fetch a specific message via LOCO (GETMSGS) and build MessageEvent.
    */
   async fetchMessage(chatId: number | string, logId: number | string) {
-    const normalizedLogId = this._resolveLogId(logId);
+    const normalizedLogId = this._resolveLogId(chatId, logId);
     if (!normalizedLogId || normalizedLogId === 0 || normalizedLogId === '0') {
       throw new Error('fetchMessage requires logId');
     }
@@ -2442,7 +2441,7 @@ export class KakaoForgeClient extends EventEmitter {
 
     const resolvedChatId = this._resolveChatId(chatId);
     this._recordChatAlias(resolvedChatId);
-    this._recordLogAlias(normalizedLogId);
+    this._recordLogAlias(resolvedChatId, normalizedLogId);
     const res = await this._carriage.getMsgs([resolvedChatId], [normalizedLogId]);
     const body = res?.body || {};
     const logs =
