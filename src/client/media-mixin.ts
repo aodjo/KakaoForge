@@ -921,25 +921,25 @@ async function sendSchedule(this: KakaoForgeClient, chatId: number | string, sch
     }
 
     if (!schedule || typeof schedule !== 'object') {
-      throw new Error('?쇱젙 ?꾩넚?먮뒗 ?쇱젙 ?뺣낫媛 ?꾩슂?⑸땲??');
+      throw new Error('Schedule sending requires a schedule object.');
     }
 
     const payload = schedule as SchedulePayload;
     if (payload.eventAt === undefined || payload.eventAt === null) {
-      throw new Error('?쇱젙 ?꾩넚?먮뒗 eventAt???꾩슂?⑸땲??');
+      throw new Error("Schedule sending requires 'eventAt'.");
     }
     if (!payload.title) {
-      throw new Error('?쇱젙 ?꾩넚?먮뒗 title???꾩슂?⑸땲??');
+      throw new Error("Schedule sending requires 'title'.");
     }
 
     let eventAtDate = toDate(payload.eventAt);
     if (!eventAtDate) {
-      throw new Error('?쇱젙 ?꾩넚: eventAt ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
+      throw new Error("Schedule sending: invalid 'eventAt' format.");
     }
     eventAtDate = snapToFiveMinutes(eventAtDate, 'ceil');
     let endAtDate = payload.endAt ? toDate(payload.endAt) : new Date(eventAtDate.getTime() + 60 * 60 * 1000);
     if (!endAtDate) {
-      throw new Error('?쇱젙 ?꾩넚: endAt ?뺤떇???щ컮瑜댁? ?딆뒿?덈떎.');
+      throw new Error("Schedule sending: invalid 'endAt' format.");
     }
     endAtDate = snapToFiveMinutes(endAtDate, 'ceil');
     if (endAtDate.getTime() <= eventAtDate.getTime()) {
