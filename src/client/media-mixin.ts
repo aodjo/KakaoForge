@@ -1004,17 +1004,17 @@ async function sendSchedule(this: KakaoForgeClient, chatId: number | string, sch
     };
 
     const createRes = await runCalendar(() => calendar.createEvent(addEvent, { referer }));
-    assertCalendarOk(createRes, '?쇱젙 ?앹꽦');
+    assertCalendarOk(createRes, 'Schedule creation');
     const eId = extractEventId(createRes?.body);
     if (!eId) {
-      throw new Error('?쇱젙 ?앹꽦 ?ㅽ뙣: eId ?놁쓬');
+      throw new Error('Schedule creation failed: no eId');
     }
 
     const connectRes = await runCalendar(() => calendar.connectEvent(eId, chatIdNum, referer));
-    assertCalendarOk(connectRes, '?쇱젙 ?곌껐');
+    assertCalendarOk(connectRes, 'Schedule connect');
 
     const shareRes = await runCalendar(() => calendar.shareMessage(eId, referer));
-    assertCalendarOk(shareRes, '?쇱젙 怨듭쑀');
+    assertCalendarOk(shareRes, 'Schedule share');
     let attachment = extractShareMessageData(shareRes?.body);
     attachment = normalizeScheduleShareData(attachment);
     if (this.debug) {
