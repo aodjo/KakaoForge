@@ -335,7 +335,12 @@ export class KakaoForgeClient extends EventEmitter {
     const chatKey = String(normalizeIdValue(chatId));
     const aliasKey = `${chatKey}:${approxStr}`;
     if (approxStr !== idStr) {
-      this._logIdAliases.set(aliasKey, idStr);
+      // LRU eviction: limit map size to 10000 entries
+      if (this._logIdAliases.size >= 10000) {
+        const firstKey = this._logIdAliases.keys().next().value;
+        if (firstKey) this._logIdAliases.delete(firstKey);
+      }
+      this._logIdAliases.set(approxStr, idStr);
     }
   }
 
