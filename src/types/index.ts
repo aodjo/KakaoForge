@@ -6,3 +6,4 @@ export * from './events';
 export * from './options';
 export * from './payloads';
 export * from './config';
+export * from './voiceroom';

@@ -68,6 +68,29 @@ import {
   type DeleteEventHandler,
   type HideEventHandler,
   type MemberNameCache,
+  type VoiceRoomMeta,
+  type VoiceRoomJoinInfo,
+  type VoiceRoomCurrentInfo,
+  type VoiceRoomControlResult,
+  type VoiceRoomRequestType,
+  type VoiceRoomMetaEvent,
+  type VoiceRoomLiveOnEvent,
+  type VoiceRoomJoinableEvent,
+  type VoiceRoomStartedEvent,
+  type VoiceRoomEndedEvent,
+  type VoiceRoomMembersEvent,
+  type VoiceRoomNotifyEvent,
+  type VoiceRoomResponseEvent,
+  type VoiceRoomRoomInfoEvent,
+  type VoiceRoomRemainTimeEvent,
+  type VoiceRoomMicForcedEvent,
+  type VoiceRoomReactionEvent,
+  type VoiceRoomErrorEvent,
+  type VoiceRoomRawEvent,
+  type VoiceRoomEventHandler,
+  resolveVoiceRoomNotifyType,
+  resolveVoiceRoomRequestType,
+  resolveVoiceRoomResponseCodeName,
 } from '../types';
 
 export class KakaoForgeClient extends EventEmitter {
@@ -144,6 +167,9 @@ export class KakaoForgeClient extends EventEmitter {
   _disconnectRequested: boolean;
   _sendQueue: Promise<void>;
   _lastSendAt: number;
+  _voiceRoomMetaCache: Map<string, VoiceRoomMeta>;
+  _voiceRoomJoinableCache: Map<string, boolean>;
+  _voiceRoomCurrent: VoiceRoomCurrentInfo;
 
   constructor(config: KakaoForgeConfig = {}) {
     super();
@@ -258,6 +284,14 @@ export class KakaoForgeClient extends EventEmitter {
     this._disconnectRequested = false;
     this._sendQueue = Promise.resolve();
     this._lastSendAt = 0;
+    this._voiceRoomMetaCache = new Map();
+    this._voiceRoomJoinableCache = new Map();
+    this._voiceRoomCurrent = {
+      active: false,
+      chatId: 0,
+      callId: 0,
+      source: 'internal',
+    };
 
     this.chat = {
       sendText: (chatId, text, opts) => this.sendMessage(chatId, text, 1, opts),
@@ -291,6 +325,39 @@ export class KakaoForgeClient extends EventEmitter {
       sendLocation: (chatId, location, opts) => this.sendLocation(chatId, location, opts),
       sendSchedule: (chatId, schedule, opts) => this.sendSchedule(chatId, schedule, opts),
       sendLink: (chatId, link, opts) => this.sendLink(chatId, link, opts),
+      voiceRoom: {
+        getMeta: (chatId) => this.getVoiceRoomMeta(chatId),
+        refreshMeta: (chatId) => this.refreshVoiceRoomMeta(chatId),
+        isLiveOn: (chatId) => this.isVoiceRoomLiveOn(chatId),
+        getJoinInfo: (chatId) => this.getVoiceRoomJoinInfo(chatId),
+        getCurrent: () => this.getCurrentVoiceRoom(),
+        join: (joinInfo) => this.joinVoiceRoom(joinInfo),
+        leave: (opts) => this.leaveVoiceRoom(opts),
+        requestSpeakerPermission: () => this.requestVoiceRoomSpeakerPermission(),
+        cancelSpeakerPermission: () => this.cancelVoiceRoomSpeakerPermission(),
+        acceptSpeakerInvitation: () => this.acceptVoiceRoomSpeakerInvitation(),
+        declineSpeakerInvitation: () => this.declineVoiceRoomSpeakerInvitation(),
+        acceptModeratorInvitation: () => this.acceptVoiceRoomModeratorInvitation(),
+        declineModeratorInvitation: () => this.declineVoiceRoomModeratorInvitation(),
+        inviteAsSpeaker: (userId) => this.inviteVoiceRoomSpeaker(userId),
+        inviteAsModerator: (userId) => this.inviteVoiceRoomModerator(userId),
+        authorizeSpeakerPermission: (userId) => this.authorizeVoiceRoomSpeakerPermission(userId),
+        rejectSpeakerPermission: (userId) => this.rejectVoiceRoomSpeakerPermission(userId),
+        revokeSpeakerPermission: (userId) => this.revokeVoiceRoomSpeakerPermission(userId),
+        revokeModeratorPrivileges: (userId) => this.revokeVoiceRoomModeratorPrivileges(userId),
+        setReqSpeakerPermissionEnabled: (enabled) => this.setVoiceRoomReqSpeakerPermissionEnabled(enabled),
+        shareContent: (content, clear) => this.shareVoiceRoomContent(content, clear),
+        changeTitle: (title) => this.changeVoiceRoomTitle(title),
+        raiseHand: () => this.raiseVoiceRoomHand(),
+        lowerHand: () => this.lowerVoiceRoomHand(),
+        lowerHandOf: (userId) => this.lowerVoiceRoomHandOf(userId),
+        setMyMicMuted: (muted) => this.setVoiceRoomMyMicMuted(muted),
+        setSpeakerOutputMuted: (muted) => this.setVoiceRoomSpeakerOutputMuted(muted),
+        turnOffRemoteMic: (userId) => this.turnOffVoiceRoomRemoteMic(userId),
+        turnOffRemoteCamera: (userId) => this.turnOffVoiceRoomRemoteCamera(userId),
+        sendReaction: (reaction) => this.sendVoiceRoomReaction(reaction),
+        setVoiceFilter: (value) => this.setVoiceRoomFilter(value),
+      },
     };
   }
 
@@ -361,6 +428,551 @@ export class KakaoForgeClient extends EventEmitter {
     const key = String(normalized);
     const aliasKey = `${chatKey}:${key}`;
     return this._logIdAliases.get(aliasKey) || normalized;
+  }
+
+  _safeVoiceRoomBoolean(value: any) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const trimmed = value.trim().toLowerCase();
+      return trimmed === 'true' || trimmed === '1' || trimmed === 'y' || trimmed === 'yes' || trimmed === 'on';
+    }
+    return false;
+  }
+
+  _parseVoiceRoomMetaCandidate(candidate: any, chatId: number | string): VoiceRoomMeta | null {
+    if (candidate === undefined || candidate === null) return null;
+
+    let parsed: any = candidate;
+    if (typeof parsed === 'string') {
+      const trimmed = parsed.trim();
+      if (!trimmed) return null;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        return null;
+      }
+    }
+
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const hasVoiceKeys =
+      parsed.liveon !== undefined ||
+      parsed.liveOn !== undefined ||
+      parsed.isLiveOn !== undefined ||
+      parsed.callId !== undefined ||
+      parsed.csIP !== undefined ||
+      parsed.csIP6 !== undefined ||
+      parsed.csPort !== undefined ||
+      parsed.blind !== undefined ||
+      parsed.url !== undefined ||
+      parsed.title !== undefined ||
+      parsed.voiceRoom !== undefined ||
+      parsed.voiceroom !== undefined;
+
+    if (!hasVoiceKeys) return null;
+
+    const nested = parsed.voiceRoom || parsed.voiceroom || null;
+    if (nested && typeof nested === 'object') {
+      parsed = { ...parsed, ...nested };
+    }
+
+    const callIdValue = normalizeIdValue(parsed.callId || parsed.cid || parsed.callid || 0) || 0;
+    const csPort = safeNumber(parsed.csPort ?? parsed.csport ?? parsed.port ?? 0, 0);
+    const joinPort = safeNumber(parsed.joinPort ?? 0, 0) || (csPort > 0 ? csPort + 1 : 0);
+    const hostV4 = typeof parsed.csIP === 'string' ? parsed.csIP : (typeof parsed.hostV4 === 'string' ? parsed.hostV4 : '');
+    const hostV6 = typeof parsed.csIP6 === 'string' ? parsed.csIP6 : (typeof parsed.hostV6 === 'string' ? parsed.hostV6 : '');
+    const title = typeof parsed.title === 'string'
+      ? parsed.title
+      : (typeof parsed.name === 'string' ? parsed.name : (typeof parsed.subject === 'string' ? parsed.subject : ''));
+
+    return {
+      chatId,
+      liveOn: this._safeVoiceRoomBoolean(parsed.liveon ?? parsed.liveOn ?? parsed.isLiveOn),
+      callId: callIdValue,
+      title: title || undefined,
+      blind: this._safeVoiceRoomBoolean(parsed.blind),
+      hostV4: hostV4 || undefined,
+      hostV6: hostV6 || undefined,
+      csPort: csPort > 0 ? csPort : undefined,
+      joinPort: joinPort > 0 ? joinPort : undefined,
+      url: typeof parsed.url === 'string' && parsed.url ? parsed.url : undefined,
+      raw: parsed,
+    };
+  }
+
+  _extractVoiceRoomMetaFromChat(chat: any, chatId: number | string): VoiceRoomMeta | null {
+    if (!chat || typeof chat !== 'object') return null;
+
+    const candidates: any[] = [];
+    const pushCandidate = (value: any) => {
+      if (value === undefined || value === null) return;
+      candidates.push(value);
+    };
+
+    pushCandidate(chat.voiceRoom);
+    pushCandidate(chat.voiceroom);
+    pushCandidate(chat.voiceRoomMeta);
+    pushCandidate(chat.meta);
+    pushCandidate(chat.chatMeta?.content ?? chat.chatMeta);
+
+    if (Array.isArray(chat.chatMetas)) {
+      for (const meta of chat.chatMetas) {
+        pushCandidate(meta?.content ?? meta);
+      }
+    }
+
+    let best: VoiceRoomMeta | null = null;
+    let bestScore = -1;
+
+    const scoreMeta = (meta: VoiceRoomMeta) => {
+      let score = 0;
+      if (meta.liveOn) score += 2;
+      if (meta.callId && String(meta.callId) !== '0') score += 2;
+      if (meta.hostV4 || meta.hostV6) score += 1;
+      if (meta.csPort || meta.joinPort) score += 1;
+      return score;
+    };
+
+    for (const candidate of candidates) {
+      const parsed = this._parseVoiceRoomMetaCandidate(candidate, chatId);
+      if (!parsed) continue;
+      const score = scoreMeta(parsed);
+      if (!best || score > bestScore) {
+        best = parsed;
+        bestScore = score;
+      }
+    }
+
+    if (!best) return null;
+
+    if (!best.title) {
+      const fallbackTitle = this._extractTitle(chat);
+      if (fallbackTitle) best.title = fallbackTitle;
+    }
+
+    return best;
+  }
+
+  _isSameVoiceRoomMeta(a: VoiceRoomMeta | null, b: VoiceRoomMeta | null) {
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    return (
+      String(a.chatId) === String(b.chatId) &&
+      !!a.liveOn === !!b.liveOn &&
+      String(a.callId || 0) === String(b.callId || 0) &&
+      String(a.title || '') === String(b.title || '') &&
+      !!a.blind === !!b.blind &&
+      String(a.hostV4 || '') === String(b.hostV4 || '') &&
+      String(a.hostV6 || '') === String(b.hostV6 || '') &&
+      safeNumber(a.csPort || 0, 0) === safeNumber(b.csPort || 0, 0) &&
+      safeNumber(a.joinPort || 0, 0) === safeNumber(b.joinPort || 0, 0) &&
+      String(a.url || '') === String(b.url || '')
+    );
+  }
+
+  _isVoiceRoomJoinableMeta(meta: VoiceRoomMeta | null) {
+    if (!meta || !meta.liveOn) return false;
+    const hasCallId = !!meta.callId && String(meta.callId) !== '0';
+    const hasHost = !!(meta.hostV4 || meta.hostV6);
+    const port = safeNumber(meta.joinPort || meta.csPort || 0, 0);
+    return hasCallId && hasHost && port > 0;
+  }
+
+  _getVoiceRoomJoinInfoFromMeta(meta: VoiceRoomMeta | null): VoiceRoomJoinInfo | null {
+    if (!this._isVoiceRoomJoinableMeta(meta) || !meta) return null;
+    const port = safeNumber(meta.joinPort || meta.csPort || 0, 0);
+    if (port <= 0) return null;
+    return {
+      chatId: meta.chatId,
+      callId: meta.callId,
+      hostV4: meta.hostV4 || '',
+      hostV6: meta.hostV6 || '',
+      port,
+      title: meta.title,
+      blind: meta.blind,
+    };
+  }
+
+  _getVoiceRoomMetaFromCache(chatId: number | string): VoiceRoomMeta | null {
+    const key = String(this._resolveChatId(chatId));
+    const meta = this._voiceRoomMetaCache.get(key);
+    if (!meta) return null;
+    return { ...meta };
+  }
+
+  _getCurrentVoiceRoomState(): VoiceRoomCurrentInfo {
+    return { ...this._voiceRoomCurrent };
+  }
+
+  _emitVoiceRoomEvent(eventName: string, event: any) {
+    this.emit(eventName, this.chat, event);
+  }
+
+  _emitVoiceRoomMetaDelta(
+    chatId: number | string,
+    previousMeta: VoiceRoomMeta | null,
+    nextMeta: VoiceRoomMeta | null,
+    raw: any = null,
+    source: 'loco' | 'vox' | 'internal' = 'loco'
+  ) {
+    const prevLiveOn = !!previousMeta?.liveOn;
+    const nextLiveOn = !!nextMeta?.liveOn;
+    const prevJoinable = this._isVoiceRoomJoinableMeta(previousMeta);
+    const nextJoinable = this._isVoiceRoomJoinableMeta(nextMeta);
+    const callId = normalizeIdValue(nextMeta?.callId || previousMeta?.callId || 0) || 0;
+
+    if (!this._isSameVoiceRoomMeta(previousMeta, nextMeta)) {
+      if (nextMeta) {
+        const metaEvent: VoiceRoomMetaEvent = {
+          at: Date.now(),
+          source,
+          room: { chatId, callId },
+          meta: { ...nextMeta },
+          raw,
+        };
+        this._emitVoiceRoomEvent('voiceroom:meta', metaEvent);
+      }
+    }
+
+    if (prevLiveOn !== nextLiveOn) {
+      const liveOnEvent: VoiceRoomLiveOnEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId, callId },
+        liveOn: nextLiveOn,
+        previousLiveOn: prevLiveOn,
+        meta: nextMeta ? { ...nextMeta } : null,
+        raw,
+      };
+      this._emitVoiceRoomEvent('voiceroom:liveon', liveOnEvent);
+
+      if (!prevLiveOn && nextLiveOn) {
+        const startedEvent: VoiceRoomStartedEvent = {
+          at: Date.now(),
+          source,
+          room: { chatId, callId },
+          trigger: 'liveon',
+          raw,
+        };
+        this._emitVoiceRoomEvent('voiceroom:started', startedEvent);
+      } else if (prevLiveOn && !nextLiveOn) {
+        if (String(this._voiceRoomCurrent.chatId || 0) === String(chatId || 0)) {
+          this._voiceRoomCurrent = {
+            active: false,
+            chatId: 0,
+            callId: 0,
+            source: 'internal',
+          };
+        }
+        const endedEvent: VoiceRoomEndedEvent = {
+          at: Date.now(),
+          source,
+          room: { chatId, callId },
+          reason: 'liveoff',
+          raw,
+        };
+        this._emitVoiceRoomEvent('voiceroom:ended', endedEvent);
+      }
+    }
+
+    if (prevJoinable !== nextJoinable) {
+      const joinableEvent: VoiceRoomJoinableEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId, callId },
+        joinable: nextJoinable,
+        previousJoinable: prevJoinable,
+        joinInfo: this._getVoiceRoomJoinInfoFromMeta(nextMeta),
+        meta: nextMeta ? { ...nextMeta } : null,
+        raw,
+      };
+      this._emitVoiceRoomEvent('voiceroom:joinable', joinableEvent);
+    }
+  }
+
+  _updateVoiceRoomMetaCache(chat: any, chatId: number | string, source: 'loco' | 'vox' | 'internal' = 'loco') {
+    const key = String(chatId);
+    const previous = this._voiceRoomMetaCache.get(key) || null;
+    const hasMetaSource =
+      chat?.meta !== undefined ||
+      chat?.chatMeta !== undefined ||
+      chat?.chatMetas !== undefined ||
+      chat?.voiceRoom !== undefined ||
+      chat?.voiceroom !== undefined ||
+      chat?.voiceRoomMeta !== undefined;
+
+    const next = this._extractVoiceRoomMetaFromChat(chat, chatId);
+    if (next) {
+      this._voiceRoomMetaCache.set(key, next);
+      this._voiceRoomJoinableCache.set(key, this._isVoiceRoomJoinableMeta(next));
+    } else if (hasMetaSource) {
+      this._voiceRoomMetaCache.delete(key);
+      this._voiceRoomJoinableCache.delete(key);
+    } else {
+      return previous;
+    }
+
+    const finalMeta = next || null;
+    this._emitVoiceRoomMetaDelta(chatId, previous, finalMeta, chat, source);
+    return finalMeta;
+  }
+
+  _voiceRoomControlUnavailable(requestType: VoiceRoomRequestType | string, context: any = {}): VoiceRoomControlResult {
+    const now = Date.now();
+    const current = this._getCurrentVoiceRoomState();
+    const chatId = normalizeIdValue(context.chatId || current.chatId || 0) || 0;
+    const callId = normalizeIdValue(context.callId || current.callId || 0) || 0;
+    const message = context.reason || 'VOX transport is not implemented yet.';
+    const code = -9999;
+    const codeName = resolveVoiceRoomResponseCodeName(code);
+    const normalizedRequestType = resolveVoiceRoomRequestType(requestType);
+
+    const responseEvent: VoiceRoomResponseEvent = {
+      at: now,
+      source: 'internal',
+      room: { chatId, callId },
+      requestType: normalizedRequestType,
+      code,
+      codeName,
+      ok: false,
+      raw: context.raw ?? context,
+    };
+    this._emitVoiceRoomEvent('voiceroom:response', responseEvent);
+
+    const errorEvent: VoiceRoomErrorEvent = {
+      at: now,
+      source: 'internal',
+      room: { chatId, callId },
+      requestType: normalizedRequestType,
+      code,
+      message,
+      raw: context.raw ?? context,
+    };
+    this._emitVoiceRoomEvent('voiceroom:error', errorEvent);
+
+    return {
+      ok: false,
+      requestType: normalizedRequestType,
+      code,
+      codeName,
+      message,
+      raw: context.raw ?? context,
+    };
+  }
+
+  _toVoiceRoomUserList(input: any, role: 'moderator' | 'speaker' | 'listener') {
+    const source = Array.isArray(input) ? input : (input && typeof input === 'object' ? Object.values(input) : []);
+    const users: any[] = [];
+    for (const item of source as any[]) {
+      if (!item || typeof item !== 'object') continue;
+      const userId = normalizeIdValue(item.userID || item.userId || item.id || 0) || 0;
+      if (!userId) continue;
+      users.push({
+        userId,
+        role,
+        micOn: typeof item.bMicOn === 'boolean' ? item.bMicOn : (typeof item.micOn === 'boolean' ? item.micOn : undefined),
+        camOn: typeof item.bCamOn === 'boolean' ? item.bCamOn : (typeof item.camOn === 'boolean' ? item.camOn : undefined),
+        handUp: typeof item.handsUp === 'boolean' ? item.handsUp : (typeof item.handUp === 'boolean' ? item.handUp : undefined),
+        muted: typeof item.isMute === 'boolean' ? item.isMute : undefined,
+        voiceFilter: safeNumber(item.voiceFilter?.value ?? item.voiceFilter ?? 0, 0),
+        raw: item,
+      });
+    }
+    return users;
+  }
+
+  _emitVoiceRoomEventsFromPush(packet: any) {
+    if (!packet || typeof packet !== 'object') return;
+
+    const method = String(packet.method || '');
+    const methodUpper = method.toUpperCase();
+    const body = packet.body || {};
+    const roomPayload = body.chatInfo || body.chat || body.chatData || body.chatRoom || body;
+    const roomChatId = normalizeIdValue(
+      roomPayload?.chatId || roomPayload?.c || body.chatId || body.c || body.roomId || body.chatRoomId || 0
+    ) || 0;
+    const roomCallId = normalizeIdValue(
+      roomPayload?.callId || body.callId || body.cid || body.currentCallId || 0
+    ) || 0;
+
+    const looksVoiceRoom =
+      methodUpper.includes('VRC') ||
+      methodUpper.includes('VOICE') ||
+      methodUpper.includes('VOX') ||
+      body.liveon !== undefined ||
+      body.liveOn !== undefined ||
+      body.callId !== undefined ||
+      body.csIP !== undefined ||
+      body.reqSpkPermitEnable !== undefined ||
+      body.eventType !== undefined ||
+      body.responseCode !== undefined ||
+      body.remainTime !== undefined ||
+      body.femo !== undefined ||
+      body.spkRequestors !== undefined ||
+      body.moderators !== undefined ||
+      body.speakers !== undefined ||
+      body.listeners !== undefined;
+
+    if (!looksVoiceRoom) return;
+
+    const source = methodUpper.includes('VRC') || methodUpper.includes('VOX') ? 'vox' : 'loco';
+    const rawEvent: VoiceRoomRawEvent = {
+      at: Date.now(),
+      source,
+      room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+      method,
+      body,
+      raw: packet,
+    };
+    this._emitVoiceRoomEvent('voiceroom:raw', rawEvent);
+
+    if (roomChatId) {
+      this._updateVoiceRoomMetaCache(roomPayload, roomChatId, source);
+    }
+
+    const notifyCode = safeNumber(body.eventType ?? body.notifyType ?? body.vrcEventType, NaN);
+    if (Number.isFinite(notifyCode)) {
+      const speakerRequestorsRaw = Array.isArray(body.spkRequestors)
+        ? body.spkRequestors
+        : (Array.isArray(body.speakerRequestors) ? body.speakerRequestors : []);
+      const speakerRequestors = speakerRequestorsRaw
+        .map((id: any) => normalizeIdValue(id))
+        .filter((id: any) => id !== undefined && id !== null && id !== 0 && id !== '0');
+
+      const notifyEvent: VoiceRoomNotifyEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        notifyType: resolveVoiceRoomNotifyType(notifyCode),
+        notifyCode,
+        destUserId: normalizeIdValue(body.destUserId || body.destId || body.userId || 0) || undefined,
+        speakerRequestors: speakerRequestors.length > 0 ? speakerRequestors : undefined,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:notify', notifyEvent);
+    }
+
+    const responseCode = safeNumber(body.responseCode ?? body.resCode ?? body.vcsResponseCode, NaN);
+    if (Number.isFinite(responseCode)) {
+      const requestType = resolveVoiceRoomRequestType(body.requestType ?? body.reqType ?? body.actionType);
+      const responseEvent: VoiceRoomResponseEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        requestType,
+        code: responseCode,
+        codeName: resolveVoiceRoomResponseCodeName(responseCode),
+        ok: responseCode === 0,
+        targetUserId: normalizeIdValue(body.destUserId || body.destId || body.userId || 0) || undefined,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:response', responseEvent);
+    }
+
+    const hasRoomInfo =
+      body.reqSpkPermitEnable !== undefined ||
+      body.shareContent !== undefined ||
+      body.titleContent !== undefined;
+    if (hasRoomInfo) {
+      const roomInfoEvent: VoiceRoomRoomInfoEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        reqSpeakerPermissionEnabled: !!body.reqSpkPermitEnable,
+        shareContent: String(body.shareContent || ''),
+        shareUserId: normalizeIdValue(body.shareUserId || 0) || 0,
+        shareTimeStamp: safeNumber(body.shareTimeStamp || 0, 0),
+        shareMode: safeNumber(body.shareMode?.value ?? body.shareMode ?? 0, 0),
+        titleContent: String(body.titleContent || ''),
+        titleUserId: normalizeIdValue(body.titleUserID || body.titleUserId || 0) || 0,
+        titleTimeStamp: safeNumber(body.titleTimeStamp || 0, 0),
+        titleMode: safeNumber(body.titleMode?.value ?? body.titleMode ?? 0, 0),
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:roomInfo', roomInfoEvent);
+    }
+
+    if (body.remainTime !== undefined) {
+      const remainTimeEvent: VoiceRoomRemainTimeEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        remainTime: safeNumber(body.remainTime, 0),
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:remainTime', remainTimeEvent);
+    }
+
+    if (body.isMicOff !== undefined) {
+      const micForcedEvent: VoiceRoomMicForcedEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        isMicOff: !!body.isMicOff,
+        userId: normalizeIdValue(body.userId || body.destUserId || 0) || undefined,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:micForced', micForcedEvent);
+    }
+
+    if (body.femo !== undefined) {
+      const reactionEvent: VoiceRoomReactionEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        reaction: String(body.femo || ''),
+        userId: normalizeIdValue(body.userID || body.userId || 0) || 0,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:reaction', reactionEvent);
+    }
+
+    if (body.moderators !== undefined || body.speakers !== undefined || body.listeners !== undefined) {
+      const membersEvent: VoiceRoomMembersEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || 0, callId: roomCallId || 0 },
+        moderators: this._toVoiceRoomUserList(body.moderators, 'moderator'),
+        speakers: this._toVoiceRoomUserList(body.speakers, 'speaker'),
+        listeners: this._toVoiceRoomUserList(body.listeners, 'listener'),
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:members', membersEvent);
+    }
+
+    if (methodUpper.includes('START')) {
+      this._voiceRoomCurrent = {
+        active: true,
+        chatId: roomChatId || this._voiceRoomCurrent.chatId,
+        callId: roomCallId || this._voiceRoomCurrent.callId,
+        joinedAt: Date.now(),
+        source,
+      };
+      const startedEvent: VoiceRoomStartedEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: this._voiceRoomCurrent.chatId, callId: this._voiceRoomCurrent.callId },
+        trigger: method,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:started', startedEvent);
+    } else if (methodUpper.includes('END') || methodUpper.includes('HANGUP') || methodUpper.includes('LEAVE')) {
+      const endedEvent: VoiceRoomEndedEvent = {
+        at: Date.now(),
+        source,
+        room: { chatId: roomChatId || this._voiceRoomCurrent.chatId, callId: roomCallId || this._voiceRoomCurrent.callId },
+        reason: method,
+        raw: packet,
+      };
+      this._emitVoiceRoomEvent('voiceroom:ended', endedEvent);
+      this._voiceRoomCurrent = {
+        active: false,
+        chatId: 0,
+        callId: 0,
+        source: 'internal',
+      };
+    }
   }
 
   async _ensureChatInfo(chatId: number | string) {
@@ -902,6 +1514,7 @@ export class KakaoForgeClient extends EventEmitter {
     if (handler) {
       handler(packet);
     }
+    this._emitVoiceRoomEventsFromPush(packet);
 
     const memberAction = resolveMemberActionFromPush(packet.method);
     if (memberAction) {
@@ -978,6 +1591,74 @@ export class KakaoForgeClient extends EventEmitter {
 
   onPush(method: string, handler: (payload: any) => void) {
     this._pushHandlers.set(method, handler);
+  }
+
+  _onVoiceRoom(eventName: string, handler: VoiceRoomEventHandler<any>) {
+    const wrapped = (chat: ChatModule, event: any) => {
+      if (handler.length <= 1) {
+        (handler as (event: any) => void)(event);
+      } else {
+        (handler as (chat: ChatModule, event: any) => void)(chat, event);
+      }
+    };
+    this.on(eventName, wrapped);
+    return this;
+  }
+
+  onVoiceRoomMeta(handler: VoiceRoomEventHandler<VoiceRoomMetaEvent>) {
+    return this._onVoiceRoom('voiceroom:meta', handler);
+  }
+
+  onVoiceRoomLiveOn(handler: VoiceRoomEventHandler<VoiceRoomLiveOnEvent>) {
+    return this._onVoiceRoom('voiceroom:liveon', handler);
+  }
+
+  onVoiceRoomJoinable(handler: VoiceRoomEventHandler<VoiceRoomJoinableEvent>) {
+    return this._onVoiceRoom('voiceroom:joinable', handler);
+  }
+
+  onVoiceRoomStarted(handler: VoiceRoomEventHandler<VoiceRoomStartedEvent>) {
+    return this._onVoiceRoom('voiceroom:started', handler);
+  }
+
+  onVoiceRoomEnded(handler: VoiceRoomEventHandler<VoiceRoomEndedEvent>) {
+    return this._onVoiceRoom('voiceroom:ended', handler);
+  }
+
+  onVoiceRoomMembers(handler: VoiceRoomEventHandler<VoiceRoomMembersEvent>) {
+    return this._onVoiceRoom('voiceroom:members', handler);
+  }
+
+  onVoiceRoomNotify(handler: VoiceRoomEventHandler<VoiceRoomNotifyEvent>) {
+    return this._onVoiceRoom('voiceroom:notify', handler);
+  }
+
+  onVoiceRoomResponse(handler: VoiceRoomEventHandler<VoiceRoomResponseEvent>) {
+    return this._onVoiceRoom('voiceroom:response', handler);
+  }
+
+  onVoiceRoomRoomInfo(handler: VoiceRoomEventHandler<VoiceRoomRoomInfoEvent>) {
+    return this._onVoiceRoom('voiceroom:roomInfo', handler);
+  }
+
+  onVoiceRoomRemainTime(handler: VoiceRoomEventHandler<VoiceRoomRemainTimeEvent>) {
+    return this._onVoiceRoom('voiceroom:remainTime', handler);
+  }
+
+  onVoiceRoomMicForced(handler: VoiceRoomEventHandler<VoiceRoomMicForcedEvent>) {
+    return this._onVoiceRoom('voiceroom:micForced', handler);
+  }
+
+  onVoiceRoomReaction(handler: VoiceRoomEventHandler<VoiceRoomReactionEvent>) {
+    return this._onVoiceRoom('voiceroom:reaction', handler);
+  }
+
+  onVoiceRoomError(handler: VoiceRoomEventHandler<VoiceRoomErrorEvent>) {
+    return this._onVoiceRoom('voiceroom:error', handler);
+  }
+
+  onVoiceRoomRaw(handler: VoiceRoomEventHandler<VoiceRoomRawEvent>) {
+    return this._onVoiceRoom('voiceroom:raw', handler);
   }
 
   _emitMessage(data: any) {
@@ -2039,6 +2720,13 @@ export class KakaoForgeClient extends EventEmitter {
         lastSeenLogId,
       };
 
+      const voiceRoomMeta = this._updateVoiceRoomMetaCache(chat, chatIdValue);
+      if (voiceRoomMeta) {
+        (next as any).voiceRoomMeta = voiceRoomMeta;
+      } else if ((next as any).voiceRoomMeta) {
+        delete (next as any).voiceRoomMeta;
+      }
+
       this._chatRooms.set(key, next);
     }
   }
@@ -2704,9 +3392,11 @@ export class KakaoForgeClient extends EventEmitter {
 import { applyMessageMixin, type MessageMixin } from './message-mixin';
 import { applyMediaMixin, type MediaMixin } from './media-mixin';
 import { applyOpenChatMixin, type OpenChatMixin } from './openchat-mixin';
+import { applyVoiceRoomMixin, type VoiceRoomMixin } from './voiceroom-mixin';
 applyMessageMixin(KakaoForgeClient);
 applyMediaMixin(KakaoForgeClient);
 applyOpenChatMixin(KakaoForgeClient);
+applyVoiceRoomMixin(KakaoForgeClient);
 
 // Declare interface merging for mixins
-export interface KakaoForgeClient extends MessageMixin, MediaMixin, OpenChatMixin {}
+export interface KakaoForgeClient extends MessageMixin, MediaMixin, OpenChatMixin, VoiceRoomMixin {}

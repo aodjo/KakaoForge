@@ -16,6 +16,7 @@ import {
   type VideoQuality,
 } from './options';
 import { type LocationPayload, type SchedulePayload, type ContactPayload, type ProfilePayload } from './payloads';
+import { type VoiceRoomChatModule, type VoiceRoomMeta } from './voiceroom';
 
 export type KakaoForgeConfig = {
   userId?: number;
@@ -109,6 +110,7 @@ export type ChatModule = {
   sendLocation: (chatId: number | string, location: LocationPayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendSchedule: (chatId: number | string, schedule: SchedulePayload | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
   sendLink: (chatId: number | string, link: string | AttachmentInput, opts?: AttachmentSendOptions) => Promise<any>;
+  voiceRoom: VoiceRoomChatModule;
   type?: MemberTypeValue;
 };
 
@@ -129,6 +131,7 @@ export type ChatRoomInfo = {
   lastChatLogId?: number;
   lastSeenLogId?: number;
   lastLogId?: number;
+  voiceRoomMeta?: VoiceRoomMeta;
 };
 
 export type ChatListCursor = {
