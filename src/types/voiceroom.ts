@@ -100,6 +100,8 @@ export type VoiceRoomControlResult = {
 export type VoiceRoomControlOptions = {
   reason?: string;
   raw?: any;
+  methods?: string[];
+  timeoutMs?: number;
 };
 
 export type VoiceRoomBaseEvent = {
@@ -233,32 +235,32 @@ export type VoiceRoomChatModule = {
   isLiveOn: (chatId: number | string) => Promise<boolean>;
   getJoinInfo: (chatId: number | string) => Promise<VoiceRoomJoinInfo | null>;
   getCurrent: () => VoiceRoomCurrentInfo;
-  join: (joinInfo: VoiceRoomJoinInfo | { chatId: number | string }) => Promise<VoiceRoomControlResult>;
+  join: (joinInfo: VoiceRoomJoinInfo | { chatId: number | string }, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
   leave: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
-  requestSpeakerPermission: () => Promise<VoiceRoomControlResult>;
-  cancelSpeakerPermission: () => Promise<VoiceRoomControlResult>;
-  acceptSpeakerInvitation: () => Promise<VoiceRoomControlResult>;
-  declineSpeakerInvitation: () => Promise<VoiceRoomControlResult>;
-  acceptModeratorInvitation: () => Promise<VoiceRoomControlResult>;
-  declineModeratorInvitation: () => Promise<VoiceRoomControlResult>;
-  inviteAsSpeaker: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  inviteAsModerator: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  authorizeSpeakerPermission: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  rejectSpeakerPermission: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  revokeSpeakerPermission: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  revokeModeratorPrivileges: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  setReqSpeakerPermissionEnabled: (enabled: boolean) => Promise<VoiceRoomControlResult>;
-  shareContent: (content: string, clear?: boolean) => Promise<VoiceRoomControlResult>;
-  changeTitle: (title: string) => Promise<VoiceRoomControlResult>;
-  raiseHand: () => Promise<VoiceRoomControlResult>;
-  lowerHand: () => Promise<VoiceRoomControlResult>;
-  lowerHandOf: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  setMyMicMuted: (muted: boolean) => Promise<VoiceRoomControlResult>;
-  setSpeakerOutputMuted: (muted: boolean) => Promise<VoiceRoomControlResult>;
-  turnOffRemoteMic: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  turnOffRemoteCamera: (userId: number | string) => Promise<VoiceRoomControlResult>;
-  sendReaction: (reaction: string) => Promise<VoiceRoomControlResult>;
-  setVoiceFilter: (value: number) => Promise<VoiceRoomControlResult>;
+  requestSpeakerPermission: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  cancelSpeakerPermission: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  acceptSpeakerInvitation: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  declineSpeakerInvitation: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  acceptModeratorInvitation: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  declineModeratorInvitation: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  inviteAsSpeaker: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  inviteAsModerator: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  authorizeSpeakerPermission: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  rejectSpeakerPermission: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  revokeSpeakerPermission: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  revokeModeratorPrivileges: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  setReqSpeakerPermissionEnabled: (enabled: boolean, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  shareContent: (content: string, clear?: boolean, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  changeTitle: (title: string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  raiseHand: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  lowerHand: (opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  lowerHandOf: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  setMyMicMuted: (muted: boolean, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  setSpeakerOutputMuted: (muted: boolean, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  turnOffRemoteMic: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  turnOffRemoteCamera: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  sendReaction: (reaction: string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  setVoiceFilter: (value: number, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
 };
 
 export const VOICE_ROOM_NOTIFY_TYPE_BY_CODE: Record<number, VoiceRoomNotifyType> = {

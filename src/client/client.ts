@@ -331,32 +331,32 @@ export class KakaoForgeClient extends EventEmitter {
         isLiveOn: (chatId) => this.isVoiceRoomLiveOn(chatId),
         getJoinInfo: (chatId) => this.getVoiceRoomJoinInfo(chatId),
         getCurrent: () => this.getCurrentVoiceRoom(),
-        join: (joinInfo) => this.joinVoiceRoom(joinInfo),
+        join: (joinInfo, opts) => this.joinVoiceRoom(joinInfo, opts),
         leave: (opts) => this.leaveVoiceRoom(opts),
-        requestSpeakerPermission: () => this.requestVoiceRoomSpeakerPermission(),
-        cancelSpeakerPermission: () => this.cancelVoiceRoomSpeakerPermission(),
-        acceptSpeakerInvitation: () => this.acceptVoiceRoomSpeakerInvitation(),
-        declineSpeakerInvitation: () => this.declineVoiceRoomSpeakerInvitation(),
-        acceptModeratorInvitation: () => this.acceptVoiceRoomModeratorInvitation(),
-        declineModeratorInvitation: () => this.declineVoiceRoomModeratorInvitation(),
-        inviteAsSpeaker: (userId) => this.inviteVoiceRoomSpeaker(userId),
-        inviteAsModerator: (userId) => this.inviteVoiceRoomModerator(userId),
-        authorizeSpeakerPermission: (userId) => this.authorizeVoiceRoomSpeakerPermission(userId),
-        rejectSpeakerPermission: (userId) => this.rejectVoiceRoomSpeakerPermission(userId),
-        revokeSpeakerPermission: (userId) => this.revokeVoiceRoomSpeakerPermission(userId),
-        revokeModeratorPrivileges: (userId) => this.revokeVoiceRoomModeratorPrivileges(userId),
-        setReqSpeakerPermissionEnabled: (enabled) => this.setVoiceRoomReqSpeakerPermissionEnabled(enabled),
-        shareContent: (content, clear) => this.shareVoiceRoomContent(content, clear),
-        changeTitle: (title) => this.changeVoiceRoomTitle(title),
-        raiseHand: () => this.raiseVoiceRoomHand(),
-        lowerHand: () => this.lowerVoiceRoomHand(),
-        lowerHandOf: (userId) => this.lowerVoiceRoomHandOf(userId),
-        setMyMicMuted: (muted) => this.setVoiceRoomMyMicMuted(muted),
-        setSpeakerOutputMuted: (muted) => this.setVoiceRoomSpeakerOutputMuted(muted),
-        turnOffRemoteMic: (userId) => this.turnOffVoiceRoomRemoteMic(userId),
-        turnOffRemoteCamera: (userId) => this.turnOffVoiceRoomRemoteCamera(userId),
-        sendReaction: (reaction) => this.sendVoiceRoomReaction(reaction),
-        setVoiceFilter: (value) => this.setVoiceRoomFilter(value),
+        requestSpeakerPermission: (opts) => this.requestVoiceRoomSpeakerPermission(opts),
+        cancelSpeakerPermission: (opts) => this.cancelVoiceRoomSpeakerPermission(opts),
+        acceptSpeakerInvitation: (opts) => this.acceptVoiceRoomSpeakerInvitation(opts),
+        declineSpeakerInvitation: (opts) => this.declineVoiceRoomSpeakerInvitation(opts),
+        acceptModeratorInvitation: (opts) => this.acceptVoiceRoomModeratorInvitation(opts),
+        declineModeratorInvitation: (opts) => this.declineVoiceRoomModeratorInvitation(opts),
+        inviteAsSpeaker: (userId, opts) => this.inviteVoiceRoomSpeaker(userId, opts),
+        inviteAsModerator: (userId, opts) => this.inviteVoiceRoomModerator(userId, opts),
+        authorizeSpeakerPermission: (userId, opts) => this.authorizeVoiceRoomSpeakerPermission(userId, opts),
+        rejectSpeakerPermission: (userId, opts) => this.rejectVoiceRoomSpeakerPermission(userId, opts),
+        revokeSpeakerPermission: (userId, opts) => this.revokeVoiceRoomSpeakerPermission(userId, opts),
+        revokeModeratorPrivileges: (userId, opts) => this.revokeVoiceRoomModeratorPrivileges(userId, opts),
+        setReqSpeakerPermissionEnabled: (enabled, opts) => this.setVoiceRoomReqSpeakerPermissionEnabled(enabled, opts),
+        shareContent: (content, clear, opts) => this.shareVoiceRoomContent(content, clear, opts),
+        changeTitle: (title, opts) => this.changeVoiceRoomTitle(title, opts),
+        raiseHand: (opts) => this.raiseVoiceRoomHand(opts),
+        lowerHand: (opts) => this.lowerVoiceRoomHand(opts),
+        lowerHandOf: (userId, opts) => this.lowerVoiceRoomHandOf(userId, opts),
+        setMyMicMuted: (muted, opts) => this.setVoiceRoomMyMicMuted(muted, opts),
+        setSpeakerOutputMuted: (muted, opts) => this.setVoiceRoomSpeakerOutputMuted(muted, opts),
+        turnOffRemoteMic: (userId, opts) => this.turnOffVoiceRoomRemoteMic(userId, opts),
+        turnOffRemoteCamera: (userId, opts) => this.turnOffVoiceRoomRemoteCamera(userId, opts),
+        sendReaction: (reaction, opts) => this.sendVoiceRoomReaction(reaction, opts),
+        setVoiceFilter: (value, opts) => this.setVoiceRoomFilter(value, opts),
       },
     };
   }
@@ -718,12 +718,357 @@ export class KakaoForgeClient extends EventEmitter {
     return finalMeta;
   }
 
+  _resolveVoiceRoomControlContext(context: any = {}) {
+    const current = this._getCurrentVoiceRoomState();
+    const chatId = normalizeIdValue(
+      context.chatId ??
+      context.roomId ??
+      context.chatRoomId ??
+      context.c ??
+      context.joinInfo?.chatId ??
+      current.chatId ??
+      0
+    ) || 0;
+
+    let callId = normalizeIdValue(
+      context.callId ??
+      context.callIdx ??
+      context.cid ??
+      context.joinInfo?.callId ??
+      current.callId ??
+      0
+    ) || 0;
+
+    if ((!callId || String(callId) === '0') && chatId) {
+      const meta = this._getVoiceRoomMetaFromCache(chatId);
+      const joinInfo = this._getVoiceRoomJoinInfoFromMeta(meta);
+      const fallbackCallId = normalizeIdValue(joinInfo?.callId || meta?.callId || 0) || 0;
+      if (fallbackCallId && String(fallbackCallId) !== '0') {
+        callId = fallbackCallId;
+      }
+    }
+
+    const targetUserId = normalizeIdValue(
+      context.targetUserId ??
+      context.destUserId ??
+      context.destId ??
+      context.memberId ??
+      context.subjectUserId ??
+      0
+    ) || 0;
+
+    return { chatId, callId, targetUserId };
+  }
+
+  _buildVoiceRoomControlPayload(
+    requestType: VoiceRoomRequestType | string,
+    context: any = {},
+    payload: any = {}
+  ) {
+    const room = this._resolveVoiceRoomControlContext(context);
+    const normalizedRequestType = resolveVoiceRoomRequestType(requestType);
+    const body: any = { ...payload };
+
+    if (body.requestType === undefined) body.requestType = normalizedRequestType;
+    if (body.reqType === undefined) body.reqType = normalizedRequestType;
+    if (body.actionType === undefined) body.actionType = normalizedRequestType;
+
+    if (body.chatId === undefined) body.chatId = room.chatId;
+    if (body.c === undefined) body.c = room.chatId;
+    if (body.roomId === undefined) body.roomId = room.chatId;
+    if (body.chatRoomId === undefined) body.chatRoomId = room.chatId;
+
+    if (body.callId === undefined) body.callId = room.callId;
+    if (body.callIdx === undefined) body.callIdx = room.callId;
+    if (body.cid === undefined) body.cid = room.callId;
+
+    if (body.me === undefined) body.me = this.userId || 0;
+    if (body.userId === undefined && room.targetUserId) body.userId = room.targetUserId;
+    if (body.userID === undefined && room.targetUserId) body.userID = room.targetUserId;
+    if (body.destUserId === undefined && room.targetUserId) body.destUserId = room.targetUserId;
+    if (body.destId === undefined && room.targetUserId) body.destId = room.targetUserId;
+
+    const longKeys = [
+      'chatId',
+      'c',
+      'roomId',
+      'chatRoomId',
+      'callId',
+      'callIdx',
+      'cid',
+      'userId',
+      'userID',
+      'me',
+      'destUserId',
+      'destId',
+      'targetUserId',
+      'shareUserId',
+      'titleUserID',
+      'titleUserId',
+    ];
+
+    for (const key of longKeys) {
+      if (body[key] === undefined || body[key] === null || body[key] === '') continue;
+      body[key] = toLong(body[key]);
+    }
+
+    if (body.enabled !== undefined) body.enabled = !!body.enabled;
+    if (body.enable !== undefined) body.enable = !!body.enable;
+    if (body.clear !== undefined) body.clear = !!body.clear;
+    if (body.muted !== undefined) body.muted = !!body.muted;
+    if (body.micMute !== undefined) body.micMute = !!body.micMute;
+    if (body.audioMute !== undefined) body.audioMute = !!body.audioMute;
+    if (body.micOn !== undefined) body.micOn = !!body.micOn;
+    if (body.camOn !== undefined) body.camOn = !!body.camOn;
+    if (body.audioMute === undefined && body.muted !== undefined) body.audioMute = !!body.muted;
+    if (body.micMute === undefined && body.muted !== undefined) body.micMute = !!body.muted;
+
+    if (body.control !== undefined) body.control = String(body.control);
+    if (body.content !== undefined) body.content = String(body.content);
+    if (body.title !== undefined) body.title = String(body.title);
+    if (body.femo !== undefined) body.femo = String(body.femo);
+
+    if (body.type !== undefined) body.type = safeNumber(body.type, 0);
+    if (body.value !== undefined && typeof body.value !== 'string') body.value = safeNumber(body.value, 0);
+    if (body.voiceFilter !== undefined) body.voiceFilter = safeNumber(body.voiceFilter, 0);
+    if (body.filter !== undefined) body.filter = safeNumber(body.filter, 0);
+    if (body.aFilter !== undefined) body.aFilter = safeNumber(body.aFilter, 0);
+
+    return body;
+  }
+
+  _voiceRoomControlLocalSuccess(requestType: VoiceRoomRequestType | string, context: any = {}): VoiceRoomControlResult {
+    const now = Date.now();
+    const room = this._resolveVoiceRoomControlContext(context);
+    const code = 0;
+    const codeName = resolveVoiceRoomResponseCodeName(code);
+    const normalizedRequestType = resolveVoiceRoomRequestType(requestType);
+
+    const responseEvent: VoiceRoomResponseEvent = {
+      at: now,
+      source: 'internal',
+      room: { chatId: room.chatId, callId: room.callId },
+      requestType: normalizedRequestType,
+      code,
+      codeName,
+      ok: true,
+      targetUserId: room.targetUserId || undefined,
+      raw: context.raw ?? context,
+    };
+    this._emitVoiceRoomEvent('voiceroom:response', responseEvent);
+
+    return {
+      ok: true,
+      requestType: normalizedRequestType,
+      code,
+      codeName,
+      message: context.message ? String(context.message) : undefined,
+      raw: context.raw ?? context,
+    };
+  }
+
+  async _requestVoiceRoomControl(
+    requestType: VoiceRoomRequestType | string,
+    methodCandidates: string[] = [],
+    payload: any = {},
+    context: any = {}
+  ): Promise<VoiceRoomControlResult> {
+    const normalizedRequestType = resolveVoiceRoomRequestType(requestType);
+    const room = this._resolveVoiceRoomControlContext({ ...context, ...payload });
+    const timeoutMs = safeNumber(context.timeoutMs ?? payload.timeoutMs ?? 10000, 10000) || 10000;
+
+    const rawMethodOverrides = Array.isArray(context.methods)
+      ? context.methods
+      : (Array.isArray(payload.methods) ? payload.methods : []);
+    const normalizedMethods = uniqueStrings([...(methodCandidates || []), ...(rawMethodOverrides || [])])
+      .map((method) => String(method || '').trim().toUpperCase())
+      .filter((method) => method.length > 0)
+      .map((method) => method.length > 11 ? method.slice(0, 11) : method);
+
+    if (normalizedMethods.length === 0) {
+      return this._voiceRoomControlUnavailable(normalizedRequestType, {
+        ...room,
+        reason: 'No voice-room control method candidates provided.',
+        raw: { payload, context },
+      });
+    }
+
+    if (!this._carriage && !this._locoAutoConnectAttempted) {
+      this._locoAutoConnectAttempted = true;
+      try {
+        await this.connect();
+      } catch (err: any) {
+        if (this.debug) {
+          console.error('[DBG] LOCO auto-connect failed (voice-room control):', err?.message || String(err));
+        }
+      }
+    }
+
+    if (!this._carriage) {
+      return this._voiceRoomControlUnavailable(normalizedRequestType, {
+        ...room,
+        reason: 'LOCO not connected. Call client.connect() first.',
+        raw: { payload, context, methods: normalizedMethods },
+      });
+    }
+
+    const attempts: any[] = [];
+    let selectedPacket: any = null;
+    let selectedMethod = '';
+    let selectedCode = -9999;
+    let selectedRequestBody: any = null;
+    let recognized = false;
+    let lastError: any = null;
+
+    for (const method of normalizedMethods) {
+      const requestBody = this._buildVoiceRoomControlPayload(normalizedRequestType, { ...context, ...room }, payload);
+      try {
+        const packet = await this._carriage.request(method, requestBody, timeoutMs);
+        const responseBody = packet?.body || {};
+        const codeFromBody = safeNumber(
+          responseBody.responseCode ??
+          responseBody.resCode ??
+          responseBody.vcsResponseCode ??
+          responseBody.code,
+          NaN
+        );
+        const codeFromStatus = safeNumber(packet?.status, NaN);
+        const code = Number.isFinite(codeFromBody)
+          ? codeFromBody
+          : (Number.isFinite(codeFromStatus) ? codeFromStatus : -9999);
+
+        const hasBody = !!responseBody && typeof responseBody === 'object' && Object.keys(responseBody).length > 0;
+        const looksVoiceRoomBody =
+          responseBody.responseCode !== undefined ||
+          responseBody.resCode !== undefined ||
+          responseBody.vcsResponseCode !== undefined ||
+          responseBody.reqSpkPermitEnable !== undefined ||
+          responseBody.eventType !== undefined ||
+          responseBody.notifyType !== undefined ||
+          responseBody.remainTime !== undefined ||
+          responseBody.femo !== undefined ||
+          responseBody.spkRequestors !== undefined;
+        const looksRecognized = looksVoiceRoomBody || Number.isFinite(codeFromBody) || codeFromStatus === 0 || hasBody;
+
+        attempts.push({
+          method,
+          status: packet?.status,
+          code,
+          recognized: looksRecognized,
+        });
+
+        selectedPacket = packet;
+        selectedMethod = method;
+        selectedCode = code;
+        selectedRequestBody = requestBody;
+        if (looksRecognized) {
+          recognized = true;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        attempts.push({
+          method,
+          error: err?.message || String(err),
+        });
+      }
+    }
+
+    if (!selectedPacket) {
+      return this._voiceRoomControlUnavailable(normalizedRequestType, {
+        ...room,
+        reason: lastError?.message || 'Voice-room control request failed.',
+        raw: { payload, context, methods: normalizedMethods, attempts },
+      });
+    }
+
+    const responseBody = selectedPacket?.body || {};
+    const responseChatId = normalizeIdValue(
+      responseBody.chatId ?? responseBody.c ?? room.chatId ?? 0
+    ) || room.chatId || 0;
+    const responseCallId = normalizeIdValue(
+      responseBody.callId ?? responseBody.callIdx ?? responseBody.cid ?? room.callId ?? 0
+    ) || room.callId || 0;
+    const responseRequestType = resolveVoiceRoomRequestType(
+      responseBody.requestType ?? responseBody.reqType ?? responseBody.actionType ?? normalizedRequestType
+    );
+    const codeName = resolveVoiceRoomResponseCodeName(selectedCode);
+    const ok = selectedCode === 0;
+
+    const responseRaw = {
+      method: selectedMethod,
+      packet: selectedPacket,
+      requestBody: selectedRequestBody,
+      attempts,
+      recognized,
+    };
+
+    const responseEvent: VoiceRoomResponseEvent = {
+      at: Date.now(),
+      source: 'loco',
+      room: { chatId: responseChatId, callId: responseCallId },
+      requestType: responseRequestType,
+      code: selectedCode,
+      codeName,
+      ok,
+      targetUserId: room.targetUserId || undefined,
+      raw: responseRaw,
+    };
+    this._emitVoiceRoomEvent('voiceroom:response', responseEvent);
+
+    if (!ok) {
+      const message = String(
+        responseBody.message ||
+        responseBody.error ||
+        `Voice-room control failed (${selectedMethod}, code=${selectedCode})`
+      );
+      const errorEvent: VoiceRoomErrorEvent = {
+        at: Date.now(),
+        source: 'loco',
+        room: { chatId: responseChatId, callId: responseCallId },
+        requestType: responseRequestType,
+        code: selectedCode,
+        message,
+        raw: responseRaw,
+      };
+      this._emitVoiceRoomEvent('voiceroom:error', errorEvent);
+    }
+
+    if (ok && responseRequestType === 'JOIN') {
+      this._voiceRoomCurrent = {
+        active: true,
+        chatId: responseChatId || room.chatId,
+        callId: responseCallId || room.callId,
+        joinedAt: Date.now(),
+        source: 'loco',
+      };
+    } else if (ok && responseRequestType === 'LEAVE') {
+      this._voiceRoomCurrent = {
+        active: false,
+        chatId: 0,
+        callId: 0,
+        source: 'internal',
+      };
+    }
+
+    return {
+      ok,
+      requestType: responseRequestType,
+      code: selectedCode,
+      codeName,
+      message: !ok
+        ? String(responseBody.message || responseBody.error || `Voice-room control failed (${selectedMethod})`)
+        : undefined,
+      raw: responseRaw,
+    };
+  }
+
   _voiceRoomControlUnavailable(requestType: VoiceRoomRequestType | string, context: any = {}): VoiceRoomControlResult {
     const now = Date.now();
-    const current = this._getCurrentVoiceRoomState();
-    const chatId = normalizeIdValue(context.chatId || current.chatId || 0) || 0;
-    const callId = normalizeIdValue(context.callId || current.callId || 0) || 0;
-    const message = context.reason || 'VOX transport is not implemented yet.';
+    const room = this._resolveVoiceRoomControlContext(context);
+    const chatId = room.chatId;
+    const callId = room.callId;
+    const message = context.reason || 'Voice-room control request is unavailable.';
     const code = -9999;
     const codeName = resolveVoiceRoomResponseCodeName(code);
     const normalizedRequestType = resolveVoiceRoomRequestType(requestType);
