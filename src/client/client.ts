@@ -1286,7 +1286,37 @@ export class KakaoForgeClient extends EventEmitter {
       this._emitVoiceRoomEvent('voiceroom:members', membersEvent);
     }
 
-    if (methodUpper.includes('START')) {
+    const startSignal =
+      methodUpper.includes('START') ||
+      methodUpper.includes('JOINVOICE') ||
+      methodUpper.includes('VOICEROOMSTART');
+
+    const stateToken = String(
+      body.treminateState ??
+      body.terminateState ??
+      body.TreminateState ??
+      body.connStateName ??
+      body.connState ??
+      body.callState ??
+      body.stateName ??
+      ''
+    ).toUpperCase();
+    const endSignalByMethod =
+      methodUpper.includes('END') ||
+      methodUpper.includes('HANGUP') ||
+      methodUpper.includes('LEAVE') ||
+      methodUpper.includes('TERMINATE') ||
+      methodUpper.includes('VREE');
+    const endSignalByState =
+      stateToken.includes('TERMINAT') ||
+      stateToken.includes('ENDED') ||
+      stateToken.includes('HANGUP') ||
+      stateToken.includes('LEAVE');
+    const liveOnValue = roomPayload?.liveon ?? roomPayload?.liveOn ?? body.liveon ?? body.liveOn;
+    const endSignalByLiveOff = liveOnValue !== undefined && !this._safeVoiceRoomBoolean(liveOnValue);
+    const endSignal = endSignalByMethod || endSignalByState || endSignalByLiveOff;
+
+    if (startSignal) {
       this._voiceRoomCurrent = {
         active: true,
         chatId: roomChatId || this._voiceRoomCurrent.chatId,
@@ -1302,12 +1332,17 @@ export class KakaoForgeClient extends EventEmitter {
         raw: packet,
       };
       this._emitVoiceRoomEvent('voiceroom:started', startedEvent);
-    } else if (methodUpper.includes('END') || methodUpper.includes('HANGUP') || methodUpper.includes('LEAVE')) {
+    } else if (endSignal) {
+      const reason = endSignalByMethod
+        ? method
+        : (endSignalByState
+          ? `state:${stateToken || 'TERMINATED'}`
+          : 'liveoff');
       const endedEvent: VoiceRoomEndedEvent = {
         at: Date.now(),
         source,
         room: { chatId: roomChatId || this._voiceRoomCurrent.chatId, callId: roomCallId || this._voiceRoomCurrent.callId },
-        reason: method,
+        reason,
         raw: packet,
       };
       this._emitVoiceRoomEvent('voiceroom:ended', endedEvent);
