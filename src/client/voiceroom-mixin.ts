@@ -6,6 +6,7 @@ import {
   type VoiceRoomControlResult,
   type VoiceRoomControlOptions,
   type VoiceRoomRequestType,
+  type ReactionTypeValue,
 } from '../types';
 import type { KakaoForgeClient } from './client';
 
@@ -68,7 +69,7 @@ export interface VoiceRoomMixin {
   setVoiceRoomSpeakerOutputMuted(muted: boolean, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
   turnOffVoiceRoomRemoteMic(userId: number | string, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
   turnOffVoiceRoomRemoteCamera(userId: number | string, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
-  sendVoiceRoomReaction(reaction: string, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
+  sendVoiceRoomReaction(reaction: string | ReactionTypeValue, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
   setVoiceRoomFilter(value: number, opts?: VoiceRoomControlOptions): Promise<VoiceRoomControlResult>;
 }
 
@@ -460,7 +461,7 @@ function turnOffVoiceRoomRemoteCamera(
 
 function sendVoiceRoomReaction(
   this: KakaoForgeClient,
-  reaction: string,
+  reaction: string | ReactionTypeValue,
   opts: VoiceRoomControlOptions = {}
 ) {
   const femo = String(reaction || '');

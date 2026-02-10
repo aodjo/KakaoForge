@@ -1,3 +1,5 @@
+import type { ReactionTypeValue } from './reaction';
+
 export type VoiceRoomSource = 'loco' | 'vox' | 'internal';
 
 export type VoiceRoomNotifyType =
@@ -259,7 +261,7 @@ export type VoiceRoomChatModule = {
   setSpeakerOutputMuted: (muted: boolean, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
   turnOffRemoteMic: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
   turnOffRemoteCamera: (userId: number | string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
-  sendReaction: (reaction: string, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
+  sendReaction: (reaction: string | ReactionTypeValue, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
   setVoiceFilter: (value: number, opts?: VoiceRoomControlOptions) => Promise<VoiceRoomControlResult>;
 };
 
